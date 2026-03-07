@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/thetta-app",
+    "crates/thetta-nesting",
+    "crates/thetta-step",
+    "crates/thetta-geometry",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.release.build-override]
+opt-level = 3

@@ -1,0 +1,7 @@
+[package]
+name = "thetta-nesting"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thetta-geometry = { path = "../thetta-geometry" }

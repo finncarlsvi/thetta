@@ -1,0 +1,11 @@
+[package]
+name = "thetta-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thetta-geometry = { path = "../thetta-geometry" }
+thetta-nesting = { path = "../thetta-nesting" }
+thetta-step = { path = "../thetta-step" }
+eframe = "0.31"
+egui = "0.31"
