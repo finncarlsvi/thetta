@@ -7,7 +7,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use egui::Color32;
+use jagua_rs::geometry::geo_enums::RotationRange;
 use thetta_geometry::types::{NestingResult, Piece, PieceId, SheetConfig};
+use thetta_nesting::benchmark::load_benchmark;
 use thetta_nesting::gls::OptimizerConfig;
 use thetta_nesting::optimizer::run_optimizer;
 use thetta_nesting::runner::NestingUpdate;
@@ -19,8 +21,15 @@ pub struct LoadedFile {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoadedBenchmark {
+    pub name: String,
+    pub strip_height: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct NestingStats {
     pub utilization_pct: f64,
+    pub strip_length: f64,
     pub pieces_placed: usize,
     pub pieces_total: usize,
     pub elapsed: Duration,
@@ -31,6 +40,7 @@ impl Default for NestingStats {
     fn default() -> Self {
         Self {
             utilization_pct: 0.0,
+            strip_length: 0.0,
             pieces_placed: 0,
             pieces_total: 0,
             elapsed: Duration::ZERO,
@@ -42,6 +52,8 @@ impl Default for NestingStats {
 pub struct AppState {
     pub loaded_files: Vec<LoadedFile>,
     pub pieces: Vec<Piece>,
+    pub piece_orientations: Vec<RotationRange>,
+    pub benchmark: Option<LoadedBenchmark>,
     pub sheet_config: SheetConfig,
     pub optimizer_config: OptimizerConfig,
     pub current_result: Option<NestingResult>,
@@ -59,6 +71,8 @@ impl Default for AppState {
         Self {
             loaded_files: vec![],
             pieces: vec![],
+            piece_orientations: vec![],
+            benchmark: None,
             sheet_config: SheetConfig::default(),
             optimizer_config: OptimizerConfig::default(),
             current_result: None,
@@ -77,8 +91,16 @@ impl AppState {
     pub fn load_json_file(&mut self, path: &Path) -> Result<usize, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-        let mut parsed: Vec<Piece> =
+        let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("json parse error: {e}"))?;
+
+        let is_benchmark = value.get("name").is_some() && value.get("items").is_some();
+        if is_benchmark {
+            return self.load_benchmark_file(path);
+        }
+
+        let mut parsed: Vec<Piece> =
+            serde_json::from_value(value).map_err(|e| format!("json parse error: {e}"))?;
 
         for p in &mut parsed {
             p.source_file = path.to_path_buf();
@@ -86,14 +108,40 @@ impl AppState {
 
         let added = parsed.len();
         self.pieces.extend(parsed);
+        self.piece_orientations
+            .extend((0..added).map(|_| RotationRange::Continuous));
         self.loaded_files.push(LoadedFile {
             path: path.to_path_buf(),
             piece_count: added,
         });
 
+        self.benchmark = None;
         self.assign_file_color(path);
         self.stats.pieces_total = self.pieces.len();
         Ok(added)
+    }
+
+    pub fn load_benchmark_file(&mut self, path: &Path) -> Result<usize, String> {
+        let (pieces, sheet, meta) = load_benchmark(path).map_err(|e| e.to_string())?;
+        let count = pieces.len();
+
+        self.pieces = pieces;
+        self.piece_orientations = meta.orientations;
+        self.sheet_config = sheet;
+        self.loaded_files = vec![LoadedFile {
+            path: path.to_path_buf(),
+            piece_count: count,
+        }];
+        self.benchmark = Some(LoadedBenchmark {
+            name: meta.name,
+            strip_height: meta.strip_height,
+        });
+        self.current_result = None;
+        self.selected_piece = None;
+
+        self.assign_file_color(path);
+        self.stats.pieces_total = count;
+        Ok(count)
     }
 
     pub fn start_optimizer(&mut self) {
@@ -105,12 +153,13 @@ impl AppState {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let pieces = self.pieces.clone();
+        let orientations = (!self.piece_orientations.is_empty()).then_some(self.piece_orientations.clone());
         let sheet = self.sheet_config.clone();
         let config = self.optimizer_config.clone();
         let cancel_bg = cancel.clone();
 
         thread::spawn(move || {
-            run_optimizer(pieces, sheet, config, tx, cancel_bg);
+            run_optimizer(pieces, sheet, orientations, config, tx, cancel_bg);
         });
 
         self.update_rx = Some(rx);
@@ -162,8 +211,13 @@ impl AppState {
     }
 
     pub fn delete_selected_piece(&mut self) {
-        if let Some(pid) = self.selected_piece.take() {
-            self.pieces.retain(|p| p.id != pid);
+        if let Some(pid) = self.selected_piece.take()
+            && let Some(idx) = self.pieces.iter().position(|p| p.id == pid)
+        {
+            self.pieces.remove(idx);
+            if idx < self.piece_orientations.len() {
+                self.piece_orientations.remove(idx);
+            }
             self.stats.pieces_total = self.pieces.len();
             self.start_optimizer();
         }
@@ -179,9 +233,16 @@ impl AppState {
     fn apply_result(&mut self, result: NestingResult) {
         let placed = result.sheets.first().map(|s| s.placements.len()).unwrap_or(0);
         let utilization = result.sheets.first().map(|s| s.utilization).unwrap_or(0.0) * 100.0;
+        let strip_length = result
+            .sheets
+            .first()
+            .map(|s| s.strip_length)
+            .unwrap_or(self.sheet_config.width);
+
         self.stats.pieces_placed = placed;
         self.stats.pieces_total = self.pieces.len();
         self.stats.utilization_pct = utilization;
+        self.stats.strip_length = strip_length;
         self.current_result = Some(result);
     }
 

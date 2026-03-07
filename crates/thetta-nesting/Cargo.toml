@@ -5,5 +5,12 @@ edition.workspace = true
 
 [dependencies]
 thetta-geometry = { path = "../thetta-geometry" }
+jagua-rs = { path = "../jagua-rs", features = ["spp"] }
+anyhow = "1"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"

@@ -91,4 +91,6 @@ pub struct NestingResult {
 pub struct Sheet {
     pub placements: Vec<Placement>,
     pub utilization: f64,
+    #[serde(default)]
+    pub strip_length: f64,
 }

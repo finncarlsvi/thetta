@@ -2,6 +2,7 @@ use crate::compression::compress_strip;
 use crate::engine::NestingEngine;
 use crate::gls::{GLSOptimizer, OptimizerConfig};
 use crate::lbf::{LbfConfig, run_lbf};
+use jagua_rs::geometry::geo_enums::RotationRange;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -17,12 +18,19 @@ pub enum NestingUpdate {
 pub fn run_nesting(
     pieces: Vec<Piece>,
     sheet: SheetConfig,
+    orientations: Option<Vec<RotationRange>>,
     config: OptimizerConfig,
     tx: mpsc::Sender<NestingUpdate>,
     cancel: Arc<AtomicBool>,
 ) {
-    let mut engine = NestingEngine::new(&pieces, &sheet);
-    let baseline = run_lbf(&mut engine, LbfConfig::default());
+    let mut engine = NestingEngine::new_with_orientations(&pieces, &sheet, orientations.as_deref());
+    let baseline = run_lbf(
+        &mut engine,
+        LbfConfig {
+            orientations: orientations.clone(),
+            ..LbfConfig::default()
+        },
+    );
     let _ = tx.send(NestingUpdate::Improved(baseline.clone()));
 
     if cancel.load(Ordering::Relaxed) {
@@ -45,7 +53,12 @@ pub fn run_nesting(
         return;
     }
 
-    let compressed = compress_strip(&pieces, sheet, config.compression_step);
+    let compressed = compress_strip(
+        &pieces,
+        sheet,
+        config.compression_step,
+        orientations.as_deref(),
+    );
     let _ = tx.send(NestingUpdate::Improved(compressed.clone()));
     let _ = tx.send(NestingUpdate::Finished(compressed));
 }

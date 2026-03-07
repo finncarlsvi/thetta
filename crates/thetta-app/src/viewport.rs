@@ -66,6 +66,20 @@ pub fn show_viewport(ui: &mut egui::Ui, state: &mut ViewportState, app: &AppStat
         egui::StrokeKind::Outside,
     );
 
+    let used_width = app
+        .current_result
+        .as_ref()
+        .and_then(|r| r.sheets.first())
+        .map(|s| s.strip_length)
+        .unwrap_or(app.stats.strip_length)
+        .clamp(0.0, app.sheet_config.width);
+    if used_width > 0.0 {
+        let x = used_width as f32;
+        let a = to_screen.transform_pos(Pos2::new(x, 0.0));
+        let b = to_screen.transform_pos(Pos2::new(x, app.sheet_config.height as f32));
+        painter.line_segment([a, b], Stroke::new(2.0, Color32::from_rgb(255, 180, 0)));
+    }
+
     let mut click_hit = None;
 
     if let Some(result) = &app.current_result {

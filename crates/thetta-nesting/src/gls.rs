@@ -49,22 +49,28 @@ impl GLSOptimizer {
         }
     }
 
-    pub fn run<F>(&mut self, mut on_update: F, stop_after: Duration, cancel: Option<&Arc<AtomicBool>>) -> NestingResult
+    pub fn run<F>(
+        &mut self,
+        mut on_update: F,
+        stop_after: Duration,
+        cancel: Option<&Arc<AtomicBool>>,
+    ) -> NestingResult
     where
         F: FnMut(NestingResult),
     {
         let start = Instant::now();
 
-        // Random initialization — force placement even with overlaps.
         let sheet = self.engine.sheet_config().clone();
         for idx in 0..self.engine.piece_count() {
-            let s = uniform_sample(&mut self.rng, &sheet);
+            let s = uniform_sample(&mut self.rng, &sheet, self.engine.rotation_range(idx));
             self.engine.force_place_item(idx, s.x, s.y, s.rotation);
         }
 
         let mut best_total_overlap = total_overlap(&self.engine);
 
-        let cancelled = |c: &Option<&Arc<AtomicBool>>| c.as_ref().map_or(false, |a| a.load(Ordering::Relaxed));
+        let cancelled = |c: &Option<&Arc<AtomicBool>>| {
+            c.as_ref().is_some_and(|a| a.load(Ordering::Relaxed))
+        };
 
         while start.elapsed() < stop_after && !cancelled(&cancel) {
             let mut best_idx = None;
@@ -86,7 +92,7 @@ impl GLSOptimizer {
 
             let mut sampled = Vec::with_capacity(self.config.samples_per_move);
             for _ in 0..self.config.samples_per_move {
-                let sample = uniform_sample(&mut self.rng, &sheet);
+                let sample = uniform_sample(&mut self.rng, &sheet, self.engine.rotation_range(idx));
                 let score = self.engine.collision_cost(idx, sample.x, sample.y, sample.rotation);
                 sampled.push((sample, score));
             }
@@ -102,6 +108,7 @@ impl GLSOptimizer {
                     |s| self.engine.collision_cost(idx, s.x, s.y, s.rotation),
                     10.0,
                     self.config.refinement_depth,
+                    self.engine.rotation_range(idx),
                 );
                 let score = self
                     .engine
@@ -133,8 +140,10 @@ impl GLSOptimizer {
                 on_update(current.clone());
             }
             if current.unplaced.is_empty() && current_overlap == 0.0 {
-                self.best_feasible = Some(current.clone());
-                on_update(current);
+                self.engine.fit_strip();
+                let feasible = self.engine.current_result();
+                self.best_feasible = Some(feasible.clone());
+                on_update(feasible);
             }
         }
 

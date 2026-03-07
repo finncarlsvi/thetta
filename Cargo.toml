@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/thetta-app",
+    "crates/jagua-rs",
     "crates/thetta-nesting",
     "crates/thetta-step",
     "crates/thetta-geometry",
@@ -11,6 +12,24 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+document-features = "0.2"
+float-cmp = "0.10"
+geo-buffer = "0.2"
+geo-types = "0.7"
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
+itertools = "0.14"
+log = "0.4"
+ndarray = "0.17"
+ordered-float = "5.0"
+rand_distr = "0.6"
+rayon = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+slotmap = "1.0"
+svg = "0.18"
+web-time = "1.1"
 
 [profile.release]
 lto = true

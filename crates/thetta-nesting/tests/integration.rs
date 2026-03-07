@@ -58,6 +58,7 @@ fn lbf_on_10_rectangles_places_all_without_overlap() {
         LbfConfig {
             grid_n: 35,
             rotations_n: 4,
+            ..LbfConfig::default()
         },
     );
 
@@ -66,7 +67,7 @@ fn lbf_on_10_rectangles_places_all_without_overlap() {
 }
 
 #[test]
-fn lbf_with_too_many_pieces_reports_unplaced() {
+fn lbf_with_too_many_pieces_expands_strip() {
     let pieces = (0..10)
         .map(|i| rect_piece(i as u64, 20.0, 20.0))
         .collect::<Vec<_>>();
@@ -82,9 +83,11 @@ fn lbf_with_too_many_pieces_reports_unplaced() {
         LbfConfig {
             grid_n: 20,
             rotations_n: 1,
+            ..LbfConfig::default()
         },
     );
 
-    assert!(result.sheets[0].placements.len() < 10);
-    assert!(!result.unplaced.is_empty());
+    assert_eq!(result.sheets[0].placements.len(), 10);
+    assert!(result.unplaced.is_empty());
+    assert!(result.sheets[0].strip_length > sheet.width);
 }

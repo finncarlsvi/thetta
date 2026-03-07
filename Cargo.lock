@@ -1583,6 +1583,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
+name = "jagua-rs"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "ordered-float",
+ "serde",
+]
+
+[[package]]
 name = "jni"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2870,6 +2879,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "jagua-rs",
  "serde_json",
  "thetta-geometry",
  "thetta-nesting",
@@ -2888,8 +2898,11 @@ dependencies = [
 name = "thetta-nesting"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "jagua-rs",
  "rand",
  "serde",
+ "serde_json",
  "thetta-geometry",
 ]
 
@@ -3924,9 +3937,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "0.7.15"
+version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
 dependencies = [
  "memchr",
 ]

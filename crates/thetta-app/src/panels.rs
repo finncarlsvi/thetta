@@ -91,8 +91,18 @@ pub fn show_side_panel(
             });
 
             ui.separator();
+            if let Some(bench) = &app.benchmark {
+                ui.collapsing("Benchmark", |ui| {
+                    ui.label(format!("Instance: {}", bench.name));
+                    ui.label(format!("Strip height: {:.3}", bench.strip_height));
+                });
+                ui.separator();
+            }
+
+            ui.separator();
             ui.collapsing("Stats", |ui| {
                 ui.label(format!("Utilization: {:.2}%", app.stats.utilization_pct));
+                ui.label(format!("Strip Length: {:.3}", app.stats.strip_length));
                 ui.label(format!(
                     "Placed: {}/{}",
                     app.stats.pieces_placed, app.stats.pieces_total

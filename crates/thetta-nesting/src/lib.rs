@@ -1,7 +1,9 @@
+pub mod benchmark;
 pub mod compression;
 pub mod conversion;
 pub mod engine;
 pub mod gls;
+pub mod hazard_counter;
 pub mod lbf;
 pub mod optimizer;
 pub mod runner;
