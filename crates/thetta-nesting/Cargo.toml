@@ -5,3 +5,5 @@ edition.workspace = true
 
 [dependencies]
 thetta-geometry = { path = "../thetta-geometry" }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }

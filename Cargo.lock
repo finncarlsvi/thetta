@@ -2870,6 +2870,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "serde_json",
  "thetta-geometry",
  "thetta-nesting",
  "thetta-step",
@@ -2878,11 +2879,17 @@ dependencies = [
 [[package]]
 name = "thetta-geometry"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "thetta-nesting"
 version = "0.1.0"
 dependencies = [
+ "rand",
+ "serde",
  "thetta-geometry",
 ]
 
