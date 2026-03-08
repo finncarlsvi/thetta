@@ -1,0 +1,5 @@
+# Required for building OCCT from source with CMake 4.x
+# The bundled OCCT CMakeLists.txt specifies cmake_minimum_required(VERSION 3.0)
+# which CMake 4.x rejects without this policy override.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

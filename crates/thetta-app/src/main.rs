@@ -1,3 +1,4 @@
+mod native_dialog;
 mod panels;
 mod state;
 mod viewport;
@@ -38,6 +39,8 @@ struct ThettaApp {
 impl eframe::App for ThettaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.state.poll_updates();
+        self.state.poll_step_import();
+        self.state.poll_step_export();
 
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
             self.state.delete_selected_piece();
@@ -56,6 +59,28 @@ impl eframe::App for ThettaApp {
                             self.state.start_optimizer();
                         }
                         Err(e) => self.error_text = Some(e),
+                    }
+                }
+                PanelAction::LoadStep(path) => {
+                    self.error_text = None;
+                    self.state.start_step_import(path);
+                }
+                PanelAction::SelectThickness(idx) => {
+                    self.state.select_thickness(idx);
+                }
+                PanelAction::ExportStep => {
+                    let default_name = self
+                        .state
+                        .step_source_path
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .and_then(|s| s.to_str())
+                        .map(|s| format!("{s}_nested.step"))
+                        .unwrap_or_else(|| "nested.step".to_string());
+                    if let Some((out_dir, file_stem)) =
+                        native_dialog::pick_export_target(&default_name)
+                    {
+                        self.state.start_step_export(out_dir, file_stem);
                     }
                 }
                 PanelAction::ToggleRun => {

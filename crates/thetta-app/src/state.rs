@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,10 @@ use thetta_nesting::benchmark::load_benchmark;
 use thetta_nesting::gls::OptimizerConfig;
 use thetta_nesting::optimizer::run_optimizer;
 use thetta_nesting::runner::NestingUpdate;
+use thetta_step::{
+    ExtractionConfig, StepExportError, StepImportError, StepImportResult, StepModel, StepPieceRef,
+    ThicknessInfo, export_all_sheets, extract_pieces_for_thickness, import_step,
+};
 
 #[derive(Debug, Clone)]
 pub struct LoadedFile {
@@ -64,6 +68,18 @@ pub struct AppState {
     pub cancel_token: Option<Arc<AtomicBool>>,
     pub run_started_at: Option<Instant>,
     pub file_colors: HashMap<PathBuf, Color32>,
+    pub step_session: Option<Arc<Mutex<StepModel>>>,
+    pub step_piece_refs: Vec<StepPieceRef>,
+    pub thickness_groups: Vec<ThicknessInfo>,
+    pub selected_thickness_idx: usize,
+    pub step_loading: bool,
+    pub step_error: Option<String>,
+    pub step_import_rx: Option<Receiver<Result<StepImportResult, StepImportError>>>,
+    pub step_exporting: bool,
+    pub step_export_status: Option<String>,
+    pub step_export_rx: Option<Receiver<Result<Vec<PathBuf>, StepExportError>>>,
+    pub step_source_path: Option<PathBuf>,
+    pub step_config: ExtractionConfig,
 }
 
 impl Default for AppState {
@@ -83,6 +99,18 @@ impl Default for AppState {
             cancel_token: None,
             run_started_at: None,
             file_colors: HashMap::new(),
+            step_session: None,
+            step_piece_refs: Vec::new(),
+            thickness_groups: Vec::new(),
+            selected_thickness_idx: 0,
+            step_loading: false,
+            step_error: None,
+            step_import_rx: None,
+            step_exporting: false,
+            step_export_status: None,
+            step_export_rx: None,
+            step_source_path: None,
+            step_config: ExtractionConfig::default(),
         }
     }
 }
@@ -118,6 +146,7 @@ impl AppState {
         self.benchmark = None;
         self.assign_file_color(path);
         self.stats.pieces_total = self.pieces.len();
+        self.step_export_status = None;
         Ok(added)
     }
 
@@ -141,6 +170,7 @@ impl AppState {
 
         self.assign_file_color(path);
         self.stats.pieces_total = count;
+        self.clear_step_session();
         Ok(count)
     }
 
@@ -153,7 +183,8 @@ impl AppState {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let pieces = self.pieces.clone();
-        let orientations = (!self.piece_orientations.is_empty()).then_some(self.piece_orientations.clone());
+        let orientations =
+            (!self.piece_orientations.is_empty()).then_some(self.piece_orientations.clone());
         let sheet = self.sheet_config.clone();
         let config = self.optimizer_config.clone();
         let cancel_bg = cancel.clone();
@@ -210,6 +241,156 @@ impl AppState {
         }
     }
 
+    pub fn start_step_import(&mut self, path: PathBuf) {
+        self.step_loading = true;
+        self.step_error = None;
+        self.step_export_status = None;
+        self.step_import_rx = None;
+
+        let (tx, rx) = mpsc::channel();
+        let config = self.step_config;
+        thread::spawn(move || {
+            let result = import_step(&path, None, &config);
+            let _ = tx.send(result);
+        });
+        self.step_import_rx = Some(rx);
+    }
+
+    pub fn poll_step_import(&mut self) {
+        let Some(rx) = &self.step_import_rx else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(result)) => {
+                self.step_loading = false;
+                self.step_import_rx = None;
+                self.apply_step_import(result);
+                self.start_optimizer();
+            }
+            Ok(Err(err)) => {
+                self.step_loading = false;
+                self.step_import_rx = None;
+                self.step_error = Some(err.to_string());
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.step_loading = false;
+                self.step_import_rx = None;
+                self.step_error = Some("STEP import thread disconnected".to_string());
+            }
+        }
+    }
+
+    pub fn select_thickness(&mut self, idx: usize) {
+        if idx >= self.thickness_groups.len() {
+            return;
+        }
+        let Some(session) = &self.step_session else {
+            return;
+        };
+
+        let selected = self.thickness_groups[idx].value_mm;
+        let (pieces, refs) = {
+            let lock = session.lock();
+            let Ok(model) = lock else {
+                self.step_error = Some("failed to lock STEP model".to_string());
+                return;
+            };
+            match extract_pieces_for_thickness(&model, selected, &self.step_config) {
+                Ok(data) => data,
+                Err(err) => {
+                    self.step_error = Some(err.to_string());
+                    return;
+                }
+            }
+        };
+
+        self.selected_thickness_idx = idx;
+        self.step_error = None;
+        self.replace_step_pieces(pieces, refs);
+        self.start_optimizer();
+    }
+
+    pub fn start_step_export(&mut self, out_dir: PathBuf, file_stem: String) {
+        let (Some(session), Some(result)) =
+            (self.step_session.clone(), self.current_result.clone())
+        else {
+            self.step_error = Some("nothing to export".to_string());
+            return;
+        };
+        let refs = self.step_piece_refs.clone();
+        let (tx, rx) = mpsc::channel();
+
+        self.step_exporting = true;
+        self.step_export_status = None;
+        self.step_export_rx = Some(rx);
+
+        thread::spawn(move || {
+            let model = match session.lock() {
+                Ok(guard) => guard.clone(),
+                Err(_) => {
+                    let _ = tx.send(Err(StepExportError::WriteError(
+                        "failed to lock STEP model".to_string(),
+                    )));
+                    return;
+                }
+            };
+
+            let exported = export_all_sheets(&model, &refs, &result, &out_dir, &file_stem);
+            let _ = tx.send(exported);
+        });
+    }
+
+    pub fn poll_step_export(&mut self) {
+        let Some(rx) = &self.step_export_rx else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(paths)) => {
+                self.step_exporting = false;
+                self.step_export_rx = None;
+
+                let mut non_step = 0usize;
+                if let Some(result) = &self.current_result {
+                    let mapped = self
+                        .step_piece_refs
+                        .iter()
+                        .map(|r| r.piece_id)
+                        .collect::<std::collections::HashSet<_>>();
+                    for sheet in &result.sheets {
+                        non_step += sheet
+                            .placements
+                            .iter()
+                            .filter(|p| !mapped.contains(&p.piece_id))
+                            .count();
+                    }
+                }
+
+                self.step_export_status = Some(if non_step == 0 {
+                    format!("Exported {} sheets", paths.len())
+                } else {
+                    format!(
+                        "Exported {} sheets (skipped {non_step} non-STEP placements)",
+                        paths.len()
+                    )
+                });
+            }
+            Ok(Err(err)) => {
+                self.step_exporting = false;
+                self.step_export_rx = None;
+                self.step_error = Some(err.to_string());
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.step_exporting = false;
+                self.step_export_rx = None;
+                self.step_error = Some("STEP export thread disconnected".to_string());
+            }
+        }
+    }
+
     pub fn delete_selected_piece(&mut self) {
         if let Some(pid) = self.selected_piece.take()
             && let Some(idx) = self.pieces.iter().position(|p| p.id == pid)
@@ -231,7 +412,11 @@ impl AppState {
     }
 
     fn apply_result(&mut self, result: NestingResult) {
-        let placed = result.sheets.first().map(|s| s.placements.len()).unwrap_or(0);
+        let placed = result
+            .sheets
+            .first()
+            .map(|s| s.placements.len())
+            .unwrap_or(0);
         let utilization = result.sheets.first().map(|s| s.utilization).unwrap_or(0.0) * 100.0;
         let strip_length = result
             .sheets
@@ -260,5 +445,70 @@ impl AppState {
         ];
         let idx = self.file_colors.len() % palette.len();
         self.file_colors.insert(path.to_path_buf(), palette[idx]);
+    }
+
+    fn apply_step_import(&mut self, result: StepImportResult) {
+        let path = result.model.source_path().to_path_buf();
+        self.step_source_path = Some(path.clone());
+        self.thickness_groups = result.thicknesses;
+        self.selected_thickness_idx = self
+            .thickness_groups
+            .iter()
+            .position(|g| (g.value_mm - result.selected_thickness_mm).abs() < 1e-9)
+            .unwrap_or(0);
+        self.step_session = Some(Arc::new(Mutex::new(result.model)));
+        self.step_error = None;
+        self.replace_step_pieces(result.pieces, result.piece_refs);
+    }
+
+    fn replace_step_pieces(&mut self, new_pieces: Vec<Piece>, new_refs: Vec<StepPieceRef>) {
+        let old_step_ids = self
+            .step_piece_refs
+            .iter()
+            .map(|r| r.piece_id)
+            .collect::<std::collections::HashSet<_>>();
+
+        let mut retained = Vec::new();
+        let mut retained_orientations = Vec::new();
+        for (idx, piece) in self.pieces.iter().enumerate() {
+            if !old_step_ids.contains(&piece.id) {
+                retained.push(piece.clone());
+                if let Some(orientation) = self.piece_orientations.get(idx) {
+                    retained_orientations.push(orientation.clone());
+                }
+            }
+        }
+
+        let step_count = new_pieces.len();
+        retained.extend(new_pieces);
+        retained_orientations.extend((0..step_count).map(|_| RotationRange::Continuous));
+
+        self.pieces = retained;
+        self.piece_orientations = retained_orientations;
+        self.step_piece_refs = new_refs;
+        self.stats.pieces_total = self.pieces.len();
+
+        if let Some(path) = self.step_source_path.clone() {
+            self.assign_file_color(&path);
+            self.loaded_files.retain(|lf| lf.path != path);
+            self.loaded_files.push(LoadedFile {
+                path,
+                piece_count: step_count,
+            });
+        }
+    }
+
+    fn clear_step_session(&mut self) {
+        self.step_session = None;
+        self.step_piece_refs.clear();
+        self.thickness_groups.clear();
+        self.selected_thickness_idx = 0;
+        self.step_loading = false;
+        self.step_error = None;
+        self.step_import_rx = None;
+        self.step_exporting = false;
+        self.step_export_rx = None;
+        self.step_export_status = None;
+        self.step_source_path = None;
     }
 }

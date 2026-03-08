@@ -3,5 +3,13 @@ name = "thetta-step"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+occt = ["dep:opencascade-sys", "dep:cxx"]
+
 [dependencies]
 thetta-geometry = { path = "../thetta-geometry" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+opencascade-sys = { git = "https://github.com/bschwind/opencascade-rs.git", features = ["builtin"], optional = true }
+cxx = { version = "1", optional = true }

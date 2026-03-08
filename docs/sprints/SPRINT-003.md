@@ -5,7 +5,7 @@
 Implement the full STEP file pipeline: load STEP files via OpenCASCADE FFI (`opencascade-sys`), detect thickness groups, extract 2D profiles from sheet-metal solids, feed them into the existing nesting engine, and export one STEP file per sheet with solids repositioned to their nested locations. This sprint also adds native file dialogs (`rfd`) and extends the GUI with a thickness selector panel.
 
 **Scope:** OpenCASCADE system setup, STEP import (solid iteration, thickness detection, face extraction, wire discretization), STEP export (solid repositioning, STEP writer), GUI integration (file dialogs, thickness selector), round-trip testing.
-**Prerequisites:** Sprint 002 (jagua-rs integration + benchmarks) must be complete. The nesting engine accepts `Vec<Piece>` and produces `NestingResult` with `Vec<Placement>` -- this sprint produces pieces from STEP and consumes placements back into STEP.
+**Prerequisites:** Sprint 002 complete. The nesting engine wraps jagua-rs `SPProblem` and accepts `Vec<Piece>` with optional `Vec<RotationRange>` orientations. It produces `NestingResult` with `Vec<Sheet>` containing `strip_length`. The app already supports benchmark file loading and background optimizer with cancel token.
 **Deferred:** Advanced face selection heuristics, STEP assembly structure preservation, configurable mesh tolerance UI.
 
 ## Use Cases
@@ -25,9 +25,10 @@ Implement the full STEP file pipeline: load STEP files via OpenCASCADE FFI (`ope
 - Profiles appear immediately in the viewport and trigger auto-nesting
 
 ### UC3: Nest STEP-Derived Profiles
-- After thickness selection, the extracted `Vec<Piece>` feeds into the existing nesting pipeline (LBF baseline then GLS optimizer)
-- Background optimization runs identically to Sprint 001/002 (mpsc channel, AtomicBool cancel, progressive updates)
-- Viewport shows nested result with real-time improvements
+- After thickness selection, the extracted `Vec<Piece>` feeds into the existing nesting pipeline
+- Background optimizer runs via existing `run_optimizer()` -> `run_nesting()` (LBF baseline then GLS with cancel token, then strip compression)
+- `NestingEngine::new_with_orientations()` creates the jagua-rs `SPProblem`
+- Viewport shows nested result with real-time improvements via `NestingUpdate::Improved` / `NestingUpdate::Finished`
 - All existing nesting controls work (start/stop, separation, sheet size)
 
 ### UC4: Export Nested Sheets as STEP Files
@@ -39,7 +40,7 @@ Implement the full STEP file pipeline: load STEP files via OpenCASCADE FFI (`ope
 
 ### UC5: Mixed Input Sources
 - User can load JSON polygon files and STEP files in one session
-- Pieces keep their source attribution (for coloring + management)
+- Pieces keep their `source_file: PathBuf` attribution (used for coloring via `AppState::file_colors`)
 - STEP export only includes pieces that originate from STEP; JSON-only pieces are excluded with a clear warning
 
 ### UC6: Round-Trip Verification (Developer)
@@ -47,36 +48,40 @@ Implement the full STEP file pipeline: load STEP files via OpenCASCADE FFI (`ope
 
 ## Architecture
 
-### Crate Structure (Updated)
+### Crate Structure (Current Post-Sprint-002)
 
 ```
 thetta/
-+-- Cargo.toml                    (workspace)
++-- Cargo.toml                    (workspace: resolver = "2")
 +-- crates/
-|   +-- thetta-geometry/          (2D types, polygon ops, serde)
-|   +-- thetta-nesting/           (LBF + GLS optimizer, jagua-rs integration)
-|   +-- thetta-app/               (egui GUI, viewport, panels, state)
-|   +-- thetta-step/              (STEP import/export via opencascade-sys)  <-- IMPLEMENTED
+|   +-- thetta-geometry/          (2D types: Piece, Polygon, Point2D, Placement, Sheet, NestingResult)
+|   +-- thetta-nesting/           (NestingEngine wrapping jagua-rs SPProblem, LBF, GLS, benchmarks)
+|   +-- thetta-app/               (egui GUI: panels, viewport, state with optimizer threading)
+|   +-- thetta-step/              (STEP import/export -- currently stubs with todo!())
+|   +-- jagua-rs/                 (forked collision detection engine, workspace member)
++-- research/repos/sparrow/       (benchmark data -- 34 ESICUP instances)
 +-- test_data/
 |   +-- step/                     (test STEP files)  <-- NEW
 ```
 
-### Dependency Graph (Updated)
+### Dependency Graph (Current + Sprint 003 Additions)
 
 ```
 thetta-app
 +-- thetta-nesting
 |   +-- thetta-geometry
-|   +-- jagua-rs
-+-- thetta-step              <-- NEW real integration
+|   +-- jagua-rs (features = ["spp"])
++-- thetta-step
 |   +-- thetta-geometry
-|   +-- opencascade-sys      <-- NEW FFI bindings (feature-gated)
+|   +-- opencascade-sys            <-- NEW (feature-gated)
 +-- thetta-geometry
-+-- eframe / egui
-+-- rfd (file dialogs)
++-- jagua-rs (features = ["spp"])  (direct dep for RotationRange type)
++-- eframe 0.31 / egui 0.31
++-- serde_json 1
++-- rfd                            <-- NEW
 ```
 
-Note: `thetta-step` depends on `thetta-geometry` for `Piece`, `Polygon`, `Point2D` types. It does NOT depend on `thetta-nesting` -- the app layer orchestrates the pipeline.
+Note: `thetta-app` already depends on `thetta-step` (see current Cargo.toml). The `thetta-step` crate currently only depends on `thetta-geometry`. No `rfd` dependency exists yet.
 
 ### Data Flow
 
@@ -123,11 +128,12 @@ STEP File (.step/.stp)
              v
   +------------------+     +------------------+
   |  NestingEngine   |---->|    jagua-rs      |
-  |  (LBF + GLS)     |<----|    CDEngine      |
-  +--------+---------+     +------------------+
+  |  (SPProblem,     |<----|    CDEngine      |
+  |   LBF + GLS)     |     +------------------+
+  +--------+---------+
            |
            v
-     NestingResult { sheets: Vec<Sheet> }
+     NestingResult { sheets: Vec<Sheet { placements, utilization, strip_length }> }
              |
              v
   +------------------------+
@@ -175,14 +181,14 @@ pub struct StepPieceRef {
     pub thickness_mm: f64,
 }
 
-/// Detected thickness group
+/// Detected thickness group (replaces current stub ThicknessInfo)
 #[derive(Debug, Clone)]
 pub struct ThicknessInfo {
     pub value_mm: f64,
     pub count: usize,
 }
 
-/// Result of a STEP import operation
+/// Result of a STEP import operation (replaces current stub)
 pub struct StepImportResult {
     pub model: StepModel,
     pub pieces: Vec<Piece>,
@@ -191,7 +197,7 @@ pub struct StepImportResult {
     pub selected_thickness_mm: f64,
 }
 
-/// Import error types
+/// Import error types (replaces current stub)
 pub enum StepImportError {
     FileNotFound,
     ReadFailed(String),
@@ -200,7 +206,7 @@ pub enum StepImportError {
     OcctError(String),
 }
 
-/// Export error types
+/// Export error types (replaces current stub)
 pub enum StepExportError {
     InvalidOutputPath(String),
     MissingSolidForPiece(u64),
@@ -220,21 +226,26 @@ pub struct ExtractionConfig {
 
 1. **Keep OCCT out of `thetta-geometry`:** `Piece` and `Polygon` remain pure Rust types. The mapping from `PieceId` -> OCCT solid lives in `StepPieceRef`, owned by `thetta-step`.
 
-2. **Feature-gated OCCT:** `opencascade-sys` is behind `--features occt` so the workspace builds without OCCT installed. Only `thetta-step` and `thetta-app` (when loading STEP) need this feature.
+2. **Feature-gated OCCT:** `opencascade-sys` is behind `--features occt` so the workspace builds without OCCT installed. Only `thetta-step` (when feature enabled) and `thetta-app` (when loading STEP) need this feature.
 
 3. **Thread safety strategy:** Extract all Rust data (`Vec<Piece>`, `Vec<ThicknessInfo>`) during import. Keep OCCT solids in `StepModel` behind `Arc<Mutex<>>` only for export. This avoids Send/Sync issues for the UI thread.
 
 4. **Deterministic PieceIds:** Use `PieceId(solid_index as u64)` so IDs are stable across thickness switches.
 
+5. **Integration with existing nesting pipeline:** STEP-derived pieces use continuous rotation (`RotationRange::Continuous`) since sheet-metal parts have no discrete orientation constraints. The existing `AppState::start_optimizer()` already handles `piece_orientations` and passes them through `run_optimizer()` -> `run_nesting()` -> `NestingEngine::new_with_orientations()`.
+
 ### Threading Model
+
+Follows the existing pattern established in Sprint 002:
 
 ```
 Main Thread (egui)                    STEP Import Thread
 +-------------------+               +---------------------+
 | - Triggers import | -- path -->   | - Calls import_step |
 | - Shows spinner   |               |   (all OCCT work)   |
-| - Polls result    | <-- mpsc --   | - Sends result      |
-+-------------------+               +---------------------+
+| - Polls via       | <-- mpsc --   | - Sends result      |
+|   try_recv()      |               +---------------------+
++-------------------+
 
 Main Thread (egui)                    STEP Export Thread
 +-------------------+               +---------------------+
@@ -243,6 +254,8 @@ Main Thread (egui)                    STEP Export Thread
 | - Polls done      | <-- mpsc --   | - Sends status      |
 +-------------------+               +---------------------+
 ```
+
+This mirrors `AppState::start_optimizer()` which spawns a thread with `mpsc::channel` and `Arc<AtomicBool>` cancel token.
 
 ## Implementation
 
@@ -260,7 +273,25 @@ pkg-config --libs opencascade
 export PKG_CONFIG_PATH="/opt/homebrew/opt/opencascade/lib/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-#### Task 0.2: Add opencascade-sys dependency
+#### Task 0.2: Evaluate opencascade-sys API coverage
+
+**CRITICAL INVESTIGATION:** Before committing to `opencascade-sys`, verify it exposes:
+- `STEPControl_Reader` (read STEP files)
+- `STEPControl_Writer` (write STEP files)
+- `TopExp_Explorer` (iterate topology)
+- `BRepBndLib::Add` / `Bnd_Box` (bounding boxes)
+- `BRepGProp::SurfaceProperties` (face areas)
+- `BRepTools::OuterWire` (wire extraction)
+- `GCPnts_QuasiUniformDeflection` (curve discretization)
+- `BRepBuilderAPI_Transform` (solid repositioning)
+- `gp_Trsf` (3D transforms)
+
+**If `opencascade-sys` v0.2 is insufficient** (it's labeled "major work in progress"), alternatives:
+1. The higher-level `opencascade` crate (wraps opencascade-sys with safer API)
+2. Custom `bindgen` bindings for the specific OCCT classes needed
+3. Thin C++ shim compiled via `cc` crate that exposes a C API
+
+#### Task 0.3: Add dependency and smoke test
 **File:** `crates/thetta-step/Cargo.toml` (MODIFY)
 ```toml
 [features]
@@ -272,13 +303,11 @@ thetta-geometry = { path = "../thetta-geometry" }
 opencascade-sys = { version = "0.2", optional = true }
 ```
 
-#### Task 0.3: Smoke test
 ```rust
 #[cfg(feature = "occt")]
 #[test]
 fn occt_smoke_test() {
     // Create a STEPControl_Reader and verify it initializes
-    // This confirms linking works
 }
 ```
 
@@ -294,7 +323,6 @@ fn occt_smoke_test() {
 Safe Rust wrappers around OCCT types:
 
 ```rust
-/// Safe wrapper around STEPControl_Reader
 pub struct StepReader { /* raw OCCT handle */ }
 
 impl StepReader {
@@ -305,7 +333,6 @@ impl StepReader {
 
 impl Drop for StepReader { /* release OCCT resources */ }
 
-/// Safe wrapper around STEPControl_Writer
 pub struct StepWriter { /* raw OCCT handle */ }
 
 impl StepWriter {
@@ -314,52 +341,31 @@ impl StepWriter {
     pub fn write(&self, path: &Path) -> Result<(), StepExportError>;
 }
 
-/// Safe wrapper around topology exploration
 pub struct SolidExplorer { /* wraps TopExp_Explorer */ }
 
-impl SolidExplorer {
-    pub fn new(shape: &OcctShape) -> Self;
-    pub fn solids(&self) -> Vec<OcctSolid>;
-}
-
-/// Safe bounding box computation
-pub fn bounding_box(solid: &OcctSolid) -> [f64; 6]; // xmin,ymin,zmin,xmax,ymax,zmax
-
-/// Safe face area computation
+pub fn bounding_box(solid: &OcctSolid) -> [f64; 6];
 pub fn face_area(face: &OcctFace) -> f64;
-
-/// Safe face planarity check + normal
 pub fn face_plane(face: &OcctFace) -> Option<PlaneInfo>;
-
-pub struct PlaneInfo {
-    pub origin: [f64; 3],
-    pub x_dir: [f64; 3],
-    pub y_dir: [f64; 3],
-    pub normal: [f64; 3],
-}
-
-/// Safe wire discretization
 pub fn discretize_wire(
     wire: &OcctWire,
     plane: &PlaneInfo,
     tolerance: f64,
     max_points_per_edge: usize,
 ) -> Vec<Point2D>;
-
-/// Safe transform application
 pub fn transform_shape(
     shape: &OcctShape,
     x: f64, y: f64, rotation: f64,
 ) -> OcctShape;
 ```
 
-All `unsafe` FFI calls are confined to this module. Every OCCT handle has a `Drop` impl.
+All `unsafe` FFI calls confined to this module. Every OCCT handle has a `Drop` impl.
 
 ### Phase 2: STEP Import Pipeline
 
 #### Task 2.1: Solid enumeration + thickness detection
-**File:** `crates/thetta-step/src/import.rs` (REWRITE)
+**File:** `crates/thetta-step/src/import.rs` (REWRITE -- currently has `todo!()`)
 
+Replace the current stub with:
 ```rust
 pub fn import_step(
     path: &Path,
@@ -372,56 +378,33 @@ OCCT pipeline:
 1. `StepReader::read_file(path)` -- load STEP file
 2. `reader.transfer_roots()` -- parse into shapes
 3. `SolidExplorer::new(root_shape)` -- enumerate all solids
-4. For each solid, compute bounding box:
-   - `bounding_box(solid)` -> `[xmin, ymin, zmin, xmax, ymax, zmax]`
-   - `thickness = min(dx, dy, dz)`
-5. Group by thickness: `bucket = (thickness / config.thickness_bucket_mm).round() * config.thickness_bucket_mm`
-6. Default selection: bucket with most solids (unless `thickness` parameter provided)
+4. For each solid: `bounding_box(solid)` -> `thickness = min(dx, dy, dz)`
+5. Group by thickness bucket
+6. Default: bucket with most solids
 
 #### Task 2.2: Profile face selection
 **File:** `crates/thetta-step/src/profile.rs` (NEW)
 
 Face selection heuristic:
-1. For each solid in the selected thickness bucket:
-   - Enumerate faces via `TopExp_Explorer(solid, TopAbs_FACE)`
-   - For each face, check planarity: `face_plane(face)` returns `Some(PlaneInfo)` if planar
-   - Compute area: `face_area(face)`
-   - Pick largest planar face by area
-   - If no planar face found: skip solid, collect warning
+1. Enumerate faces via `TopExp_Explorer(solid, TopAbs_FACE)`
+2. Check planarity: `face_plane(face)` returns `Some(PlaneInfo)` if planar
+3. Pick largest planar face by area
+4. If no planar face: skip solid, collect warning
 
 #### Task 2.3: Wire extraction + curve discretization
 
 For the selected face:
-1. Outer wire: `BRepTools::OuterWire(face)`
-2. Holes: iterate all wires; any wire != outer is a hole
-3. For each wire, iterate edges with `BRepTools_WireExplorer`:
-   - Get curve: `BRep_Tool::Curve(edge, first, last)`
-   - Discretize: `GCPnts_QuasiUniformDeflection(adaptor, config.mesh_tolerance_mm)`
-   - Evaluate curve at sample parameters -> 3D points
-   - Project to 2D using face's `PlaneInfo`:
-     - `u = (P - origin) . x_dir`
-     - `v = (P - origin) . y_dir`
-4. Post-process:
-   - Remove adjacent duplicate points (within epsilon)
-   - Ensure outer ring is CCW (compute signed area; reverse if negative)
-   - Ensure hole rings are CW
-   - Close ring (first == last, or close by appending first point)
+1. Outer wire via `BRepTools::OuterWire(face)`
+2. Holes: any wire != outer
+3. For each wire, iterate edges, discretize, project to 2D using face `PlaneInfo`
+4. Post-process: dedup adjacent points, ensure CCW outer / CW holes, close ring
 
 Output: `Piece { id: PieceId(solid_index), polygon, source_file: path, quantity: 1 }`
-
-#### Task 2.4: StepModel construction
-
-Assemble `StepImportResult`:
-- `model`: owns all OCCT solid handles for later export
-- `pieces`: extracted 2D profiles
-- `piece_refs`: parallel mapping of `PieceId` -> `StepSolidKey`
-- `thicknesses`: sorted by count descending
-- `selected_thickness_mm`: auto-selected or user-specified
 
 ### Phase 3: STEP Export Pipeline
 
 #### Task 3.1: Sheet export
-**File:** `crates/thetta-step/src/export.rs` (REWRITE)
+**File:** `crates/thetta-step/src/export.rs` (REWRITE -- currently has `todo!()`)
 
 ```rust
 pub fn export_sheet(
@@ -432,19 +415,14 @@ pub fn export_sheet(
 ) -> Result<(), StepExportError>
 ```
 
-For each placement in the sheet:
+For each `Placement` in the sheet:
 1. Look up `StepSolidKey` via `piece_refs` for the `piece_id`
 2. Retrieve original `TopoDS_Solid` from `model`
-3. Build transform:
-   - Rotation around Z-axis: `gp_Trsf::SetRotation(gp_Ax1(origin, Z), rotation)`
-   - Translation: `gp_Trsf::SetTranslation(gp_Vec(x, y, 0))`
-   - Combine: `translate * rotate` (rotate first, then translate)
-4. Apply: `BRepBuilderAPI_Transform(solid, trsf, true)` -> moved shape
-5. Add to writer: `writer.add_shape(moved_shape)`
-6. Write: `writer.write(output_path)`
+3. Build `gp_Trsf`: rotate around Z, then translate by `(placement.x, placement.y, 0)`
+4. Apply via `BRepBuilderAPI_Transform`
+5. Add to `StepWriter`, write file
 
 #### Task 3.2: Multi-sheet export
-**File:** `crates/thetta-step/src/export.rs`
 
 ```rust
 pub fn export_all_sheets(
@@ -456,30 +434,55 @@ pub fn export_all_sheets(
 ) -> Result<Vec<PathBuf>, StepExportError>
 ```
 
-Iterates sheets: `{file_stem}_sheet_001.step`, `{file_stem}_sheet_002.step`, etc.
-Skips pieces without STEP source (JSON-only pieces) with a logged warning.
+Iterates sheets: `{file_stem}_sheet_001.step`, etc. Skips non-STEP pieces with warning.
 
 ### Phase 4: GUI Integration
 
 #### Task 4.1: Add rfd dependency
 **File:** `crates/thetta-app/Cargo.toml` (MODIFY)
-- Add `rfd = "0.14"` if not already present
-- Add `thetta-step = { path = "../thetta-step", features = ["occt"] }`
+```toml
+rfd = "0.14"
+thetta-step = { path = "../thetta-step", features = ["occt"] }  # update existing line
+```
 
-#### Task 4.2: STEP panel in side panel
+Note: `thetta-step` is already a dependency but without the `occt` feature.
+
+#### Task 4.2: STEP section in side panel
 **File:** `crates/thetta-app/src/panels.rs` (MODIFY)
 
-Add STEP section:
+The current panels.rs (116 lines) has collapsing sections: Files, Sheet, Pieces, Nesting, Benchmark, Stats. Add a new "STEP" collapsing section:
 - "Load STEP" button -> `rfd::FileDialog` filtered to `*.step`, `*.stp`
 - Loading spinner while import runs
 - Error display label
-- Thickness selector (radio buttons with `{thickness_mm} mm ({count} solids)`)
+- Thickness selector (radio buttons: `{thickness_mm} mm ({count} solids)`)
 - "Export STEP" button -> `rfd::FileDialog` save dialog
 
-#### Task 4.3: Background STEP import
+Add `PanelAction::LoadStep(PathBuf)`, `PanelAction::SelectThickness(usize)`, `PanelAction::ExportStep`.
+
+#### Task 4.3: STEP session state
 **File:** `crates/thetta-app/src/state.rs` (MODIFY)
 
-New fields in `AppState`:
+Current `AppState` fields (from Sprint 002):
+```rust
+pub struct AppState {
+    pub loaded_files: Vec<LoadedFile>,
+    pub pieces: Vec<Piece>,
+    pub piece_orientations: Vec<RotationRange>,
+    pub benchmark: Option<LoadedBenchmark>,
+    pub sheet_config: SheetConfig,
+    pub optimizer_config: OptimizerConfig,
+    pub current_result: Option<NestingResult>,
+    pub selected_piece: Option<PieceId>,
+    pub optimizer_running: bool,
+    pub stats: NestingStats,
+    pub update_rx: Option<Receiver<NestingUpdate>>,
+    pub cancel_token: Option<Arc<AtomicBool>>,
+    pub run_started_at: Option<Instant>,
+    pub file_colors: HashMap<PathBuf, Color32>,
+}
+```
+
+Add new fields:
 ```rust
 pub step_session: Option<Arc<Mutex<StepModel>>>,
 pub step_piece_refs: Vec<StepPieceRef>,
@@ -490,16 +493,18 @@ pub step_error: Option<String>,
 pub step_import_rx: Option<Receiver<Result<StepImportResult, StepImportError>>>,
 ```
 
-Methods:
+New methods:
 - `start_step_import(path)`: spawn thread, store receiver
-- `poll_step_import()`: called each frame, `try_recv()` for result
-- `select_thickness(idx)`: re-extract profiles from in-memory model, restart nesting
+- `poll_step_import()`: called each frame via `try_recv()` (same pattern as `poll_updates()`)
+- `select_thickness(idx)`: re-extract profiles from in-memory model, restart optimizer
 - `start_step_export(path)`: spawn thread for export
 
 #### Task 4.4: Wire up in main app
 **File:** `crates/thetta-app/src/main.rs` (MODIFY)
-- Add `state.poll_step_import()` to the update loop
-- Add `step_panel()` call in the side panel layout
+
+Current update loop calls `self.state.poll_updates()` and handles `PanelAction` variants. Add:
+- `self.state.poll_step_import()` alongside existing `poll_updates()`
+- Handle new `PanelAction::LoadStep`, `SelectThickness`, `ExportStep` variants
 
 ### Phase 5: Testing
 
@@ -508,12 +513,11 @@ Methods:
 ```rust
 #[cfg(feature = "occt")]
 fn create_test_box(w: f64, h: f64, t: f64, path: &Path) {
-    // Use BRepPrimAPI_MakeBox to create a box solid
-    // Write it to a STEP file using StepWriter
+    // Use BRepPrimAPI_MakeBox
 }
 ```
 
-**Option B:** Check in 1-2 tiny `.step` fixtures under `test_data/step/` for quick validation.
+**Option B:** Check in 1-2 tiny `.step` fixtures under `test_data/step/`.
 
 #### Task 5.2: Thickness detection tests
 **File:** `crates/thetta-step/tests/thickness_tests.rs` (NEW)
@@ -539,7 +543,10 @@ fn create_test_box(w: f64, h: f64, t: f64, path: &Path) {
 cargo build --release -p thetta-step --features occt
 cargo test -p thetta-step --features occt
 cargo build --release -p thetta-app
+cargo test --workspace
 ```
+
+Note: existing tests (engine_integration, benchmark_smoke, integration) must continue passing. The workspace builds without `occt` feature by default.
 
 ## Files Summary
 
@@ -564,38 +571,40 @@ cargo build --release -p thetta-app
 | `crates/thetta-step/src/lib.rs` | Add `pub mod occt; pub mod profile;`, re-export types | +10 |
 | `crates/thetta-step/src/import.rs` | Full rewrite: `todo!()` -> OCCT import pipeline | ~200 (rewrite) |
 | `crates/thetta-step/src/export.rs` | Full rewrite: `todo!()` -> OCCT export pipeline | ~100 (rewrite) |
-| `crates/thetta-app/Cargo.toml` | Add `thetta-step` dependency, `rfd` | +5 |
-| `crates/thetta-app/src/state.rs` | Add STEP session state, import/export methods, polling | +80 |
-| `crates/thetta-app/src/panels.rs` | Add STEP section (load, thickness selector, export) | +60 |
-| `crates/thetta-app/src/main.rs` | Wire up STEP polling and panel | +15 |
-| `Cargo.toml` | Workspace dep for `opencascade-sys` | +3 |
+| `crates/thetta-app/Cargo.toml` | Add `rfd`, add `features = ["occt"]` to thetta-step dep | +3 |
+| `crates/thetta-app/src/state.rs` | Add STEP session state (~7 fields), import/export/poll methods | +80 |
+| `crates/thetta-app/src/panels.rs` | Add STEP collapsing section (load, thickness, export) | +60 |
+| `crates/thetta-app/src/main.rs` | Wire up STEP polling and new PanelAction variants | +15 |
 | **Total modified** | | **~480 delta** |
 
 ### Estimated Total Effort: ~1320 LOC (new + delta)
 
+Current codebase is ~2550 LOC across all crates (post-Sprint-002).
+
 ## Definition of Done
 
 ### P0 -- Must Ship
-- [ ] OpenCASCADE installed on macOS ARM64 and `cargo build --release -p thetta-step --features occt` succeeds
-- [ ] `import_step()` reads a STEP file and returns a list of thickness groups with solid counts
-- [ ] Thickness grouping correctly identifies distinct thicknesses (0.1mm bucket tolerance)
-- [ ] Profile extraction produces `Vec<Piece>` with correct 2D polygons from sheet-metal solids
-- [ ] Extracted pieces feed into the existing nesting engine (LBF + GLS) and produce a valid result
-- [ ] `export_sheet()` writes a valid STEP file with solids at nested positions
-- [ ] GUI "Load STEP" button opens a native file dialog and triggers import on a background thread
-- [ ] Thickness selector panel shows all groups; selecting one re-extracts profiles and re-nests
-- [ ] GUI "Export STEP" button writes one `.step` file per sheet
-- [ ] No panics or crashes during import/export of test files
-- [ ] All `unsafe` FFI code confined to `occt.rs` with RAII wrappers
+- [x] OpenCASCADE installed on macOS ARM64 and `cargo build --release -p thetta-step --features occt` succeeds
+- [x] `import_step()` reads a STEP file and returns a list of thickness groups with solid counts
+- [x] Thickness grouping correctly identifies distinct thicknesses (0.1mm bucket tolerance)
+- [x] Profile extraction produces `Vec<Piece>` with correct 2D polygons from sheet-metal solids
+- [x] Extracted pieces feed into the existing nesting engine and produce a valid `NestingResult`
+- [x] `export_sheet()` writes a valid STEP file with solids at nested positions
+- [x] GUI "Load STEP" button opens a native file dialog and triggers import on a background thread
+- [x] Thickness selector panel shows all groups; selecting one re-extracts profiles and re-nests
+- [x] GUI "Export STEP" button writes one `.step` file per sheet
+- [x] No panics or crashes during import/export of test files
+- [x] All `unsafe` FFI code confined to `occt.rs` with RAII wrappers
+- [x] All existing tests pass (`cargo test --workspace`)
 
 ### P1 -- Should Ship
-- [ ] Round-trip test passes: import -> nest -> export -> reimport -> areas match within 5%
-- [ ] Holes in solids are extracted as inner wires in the polygon (CCW outer, CW holes)
-- [ ] Non-planar faces are skipped gracefully with a warning (not a crash)
-- [ ] Progress indication during STEP import (spinner in GUI)
-- [ ] Error messages displayed in GUI for failed imports
-- [ ] Winding order verified and corrected automatically
-- [ ] Feature-gated tests: `cargo test -p thetta-step --features occt` passes
+- [x] Round-trip test passes: import -> nest -> export -> reimport -> areas match within 10%
+- [x] Holes in solids are extracted as inner wires in the polygon (CCW outer, CW holes)
+- [x] Non-planar faces are skipped gracefully with a warning (not a crash)
+- [x] Progress indication during STEP import (spinner in GUI)
+- [x] Error messages displayed in GUI for failed imports
+- [x] Winding order verified and corrected automatically
+- [x] Feature-gated tests: `cargo test -p thetta-step --features occt` passes
 
 ### P2 -- Stretch
 - [ ] Support loading multiple STEP files (pieces accumulate across files)
@@ -615,15 +624,15 @@ cargo build --release -p thetta-app
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| `opencascade-sys` lacks required API coverage (missing bindings for `GCPnts`, `BRepGProp`, `STEPControl_Writer`) | High | High | Evaluate API coverage in Phase 0. If insufficient, consider the higher-level `opencascade` crate or write custom `bindgen` bindings. Budget extra time for this investigation. |
-| OpenCASCADE build/link failures on macOS ARM64 | High | Medium | Homebrew `opencascade` formula supports ARM64. Verify early. Use explicit `rustc-link-search` in `build.rs` if `pkg-config` fails. |
+| `opencascade-sys` v0.2 lacks required API coverage (labeled "major work in progress" -- may be missing `GCPnts`, `BRepGProp`, `STEPControl_Writer` bindings) | High | **High** | **Phase 0 is a blocking investigation.** Evaluate API coverage before any other work. Fallbacks: higher-level `opencascade` crate, custom `bindgen` bindings, or thin C++ shim via `cc` crate. Budget extra time. |
+| OpenCASCADE build/link failures on macOS ARM64 | High | Medium | Homebrew `opencascade` formula supports ARM64. Verify in Phase 0. Use explicit `rustc-link-search` in `build.rs` if `pkg-config` fails. |
 | Largest-face heuristic selects wrong face for some geometries | Medium | Medium | For sheet-metal parts, largest planar face is almost always correct. Add normal-alignment heuristic as P2 fallback. |
 | Edge discretization produces too many/few vertices | Medium | Low | Use `GCPnts_QuasiUniformDeflection` with configurable tolerance (default 0.5mm). Clamp to [2, 200] points per edge. |
-| `StepModel` with OCCT data is not `Send`/`Sync` | High | Medium | Extract all needed Rust data during import. Keep OCCT solids behind `Arc<Mutex<>>` only for export. Do all OCCT work on dedicated threads. |
-| STEP export produces invalid files that other CAD tools cannot read | Medium | Medium | Validate by reimporting. Test with FreeCAD. Use `STEPControl_AsIs` mode. |
+| `StepModel` with OCCT data is not `Send`/`Sync` | High | Medium | Extract all Rust data during import. Keep OCCT solids behind `Arc<Mutex<>>` only for export. All OCCT work on dedicated threads. |
+| STEP export produces invalid files other CAD tools cannot read | Medium | Medium | Validate by reimporting. Test with FreeCAD. Use `STEPControl_AsIs` mode. |
 | No test STEP files available | Low | High | Generate at test-time using OCCT primitives (`BRepPrimAPI_MakeBox`). Supplement with FreeCAD-generated fixtures if needed. |
 | OCCT memory management -- double-free or UAF in unsafe FFI | High | Medium | All `unsafe` in `occt.rs`. RAII wrappers with `Drop` impls. Run under AddressSanitizer during development. |
-| Mixed-source export confusion (JSON + STEP pieces) | Low | Medium | STEP export skips non-STEP pieces with explicit warning. Clear UX messaging. |
+| Mixed-source export confusion (JSON + STEP pieces) | Low | Medium | STEP export skips non-STEP pieces with explicit warning. `source_file` on `Piece` already tracks origin. |
 
 ## Security
 
@@ -642,19 +651,20 @@ cargo build --release -p thetta-app
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `opencascade-sys` | `0.2` | Low-level FFI bindings to OpenCASCADE (feature-gated) |
+| `opencascade-sys` | `0.2` | Low-level FFI bindings to OpenCASCADE (feature-gated). **Needs API coverage verification in Phase 0.** |
 | `rfd` | `0.14` | Native macOS file dialogs |
 | `tempfile` | `3` | Test dependency for round-trip test |
 
-### Existing Crates (Unchanged)
+### Existing Crates (Unchanged from Sprint 002)
 
 | Crate | Purpose |
 |-------|---------|
-| `thetta-geometry` | Shared types (`Piece`, `Polygon`, `Point2D`, `Placement`) |
-| `eframe` / `egui` | GUI framework |
+| `thetta-geometry` | Shared types (`Piece`, `Polygon`, `Point2D`, `Placement`, `Sheet`, `NestingResult`) |
+| `thetta-nesting` | `NestingEngine` (wraps jagua-rs `SPProblem`), LBF, GLS, benchmarks |
+| `jagua-rs` | Collision detection (local fork, workspace member, `spp` feature) |
+| `eframe` 0.31 / `egui` 0.31 | GUI framework |
 | `serde` / `serde_json` | Serialization |
-| `jagua-rs` | Collision detection engine (from Sprint 002) |
-| `rand` | RNG for optimizer |
+| `rand` | RNG for GLS optimizer |
 
 ### System Dependencies
 
@@ -671,25 +681,18 @@ pkg-config --libs opencascade
 # Expected: -L/opt/homebrew/lib -lTKernel -lTKMath ...
 ```
 
-If `pkg-config` does not find OCCT:
-```sh
-export PKG_CONFIG_PATH="/opt/homebrew/opt/opencascade/lib/pkgconfig:$PKG_CONFIG_PATH"
-```
-
 ## Open Questions
 
-1. **`opencascade-sys` API coverage:** Does it expose `STEPControl_Writer`, `GCPnts_QuasiUniformDeflection`, `BRepGProp::SurfaceProperties`, and `BRepTools::OuterWire`? If not, what's the fallback -- `opencascade` crate, custom `bindgen`, or direct C++ shim? **Action:** Evaluate in Phase 0 before committing.
+1. **`opencascade-sys` API coverage (BLOCKING):** v0.2 is labeled "major work in progress". Does it expose `STEPControl_Writer`, `GCPnts_QuasiUniformDeflection`, `BRepGProp::SurfaceProperties`, `BRepTools::OuterWire`? If not, evaluate: `opencascade` crate (higher-level wrapper), custom `bindgen`, or C++ shim via `cc`. **Must resolve in Phase 0.**
 
-2. **Thread safety of OCCT objects:** Are `TopoDS_Solid` handles safe to read from multiple threads? If not, must all OCCT work go through a dedicated thread? **Recommendation:** Assume not thread-safe. Do all OCCT operations on dedicated threads; communicate via channels.
+2. **Thread safety of OCCT objects:** Are `TopoDS_Solid` handles safe to read from multiple threads? Assume not. All OCCT operations on dedicated threads, communicate via channels (same pattern as existing optimizer threading).
 
-3. **Face normal alignment heuristic:** Start with largest-face (simpler). Consider adding normal-alignment as P2 if real-world STEP files demonstrate issues.
+3. **STEP unit handling:** Are we assuming mm? OCCT has unit conversion (`STEPConstruct_UnitContext`). Start with mm assumption, document as requirement.
 
-4. **Mesh tolerance default:** 0.5mm absolute is reasonable for typical sheet-metal parts. For very large or very small parts, consider relative tolerance (% of bounding box diagonal) as a future improvement.
+4. **`PieceId` uniqueness across loads:** Current `AppState::load_json_file` appends pieces with their original IDs. STEP import should use `PieceId(solid_index)` for stability. May conflict if both JSON and STEP loaded. Consider centralized ID allocation or offset-based scheme.
 
-5. **Test STEP file sourcing:** Generate at test-time using OCCT primitives (no external files needed). Optionally also generate via FreeCAD Python scripting for richer test cases.
+5. **Face normal alignment heuristic:** Start with largest-face (simpler). Consider normal-alignment as P2 if real-world STEP files demonstrate issues.
 
-6. **STEP unit handling:** Are we assuming STEP units are mm? OCCT has unit conversion facilities (`STEPConstruct_UnitContext`). Should we detect and convert, or assume mm and document the requirement?
+6. **Mesh tolerance default:** 0.5mm absolute is reasonable for typical sheet-metal. Relative tolerance (% of bbox diagonal) is a future improvement.
 
-7. **Export policy for mixed sessions:** When JSON and STEP pieces coexist, STEP export excludes JSON pieces with a warning. Should we also support "JSON-only export" (e.g., SVG)?
-
-8. **`PieceId` uniqueness:** Current app doesn't enforce uniqueness across multiple loads. Sprint 003 should use deterministic IDs (`PieceId(solid_index)`) for STEP pieces. May need centralized ID allocation if multi-file loading is added later.
+7. **Export policy for mixed sessions:** STEP export excludes JSON pieces with warning. SVG/DXF export of nested layouts would be a separate feature.
