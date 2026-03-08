@@ -11,6 +11,7 @@ pub fn compress_strip(
     compression_step: f64,
     orientations: Option<&[RotationRange]>,
     cancel: Option<&Arc<AtomicBool>>,
+    max_strip_width: Option<f64>,
 ) -> NestingResult {
     let is_cancelled = || cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
 
@@ -25,8 +26,32 @@ pub fn compress_strip(
         |_| {},
     );
 
+    // If a max width is set and the initial LBF exceeded it, discard that
+    // result — it would place pieces beyond the sheet boundary.
+    if let Some(max_w) = max_strip_width {
+        if engine.strip_width() > max_w + 1.0 {
+            // Reset to sheet width and re-run with fixed width so pieces stay
+            // within bounds. Use the sheet width as the strip width.
+            engine.change_strip_width(max_w);
+            engine.clear_placements();
+            best = run_lbf(
+                &mut engine,
+                LbfConfig {
+                    orientations: orientations.map(|o| o.to_vec()),
+                    ..LbfConfig::default()
+                },
+                cancel,
+                |_| {},
+            );
+        }
+    }
+
     let mut low = (sheet.width * 0.2).max(1.0);
-    let mut high = engine.strip_width().max(1.0);
+    let mut high = if let Some(max_w) = max_strip_width {
+        engine.strip_width().max(1.0).min(max_w)
+    } else {
+        engine.strip_width().max(1.0)
+    };
 
     for _ in 0..8 {
         if is_cancelled() {

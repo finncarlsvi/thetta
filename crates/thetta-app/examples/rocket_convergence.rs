@@ -194,6 +194,56 @@ fn main() {
         pass = false;
     }
 
+    // ── 6. Verify zero overlap per sheet ──
+    // Build a fresh engine per sheet and replay placements with collision checks.
+    eprintln!("\nVerifying zero overlap per sheet ...");
+    let piece_by_id: std::collections::HashMap<_, _> =
+        pieces.iter().map(|p| (p.id, p)).collect();
+    for (sheet_idx, s) in result.sheets.iter().enumerate() {
+        let sheet_pieces: Vec<_> = s
+            .placements
+            .iter()
+            .filter_map(|pl| piece_by_id.get(&pl.piece_id).map(|&p| p.clone()))
+            .collect();
+        if sheet_pieces.is_empty() {
+            continue;
+        }
+
+        let mut verify_engine =
+            thetta_nesting::engine::NestingEngine::new(&sheet_pieces, &sheet);
+        let mut overlap_count = 0;
+        for (local_idx, pl) in s.placements.iter().enumerate() {
+            let cost =
+                verify_engine.collision_cost(local_idx, pl.x, pl.y, pl.rotation);
+            if cost > 0.0 {
+                overlap_count += 1;
+                if overlap_count <= 5 {
+                    eprintln!(
+                        "  Sheet {} piece {} (id={}): collision_cost={:.1} at ({:.1}, {:.1}, rot={:.3})",
+                        sheet_idx + 1, local_idx, pl.piece_id.0, cost, pl.x, pl.y, pl.rotation
+                    );
+                }
+            }
+            // Place even if overlapping so subsequent pieces see this one
+            verify_engine.force_place_item(local_idx, pl.x, pl.y, pl.rotation);
+        }
+        if overlap_count > 0 {
+            eprintln!(
+                "  FAIL: Sheet {} has {} overlapping pieces out of {}",
+                sheet_idx + 1,
+                overlap_count,
+                s.placements.len()
+            );
+            pass = false;
+        } else {
+            eprintln!(
+                "  OK: Sheet {} — {} pieces, zero overlap",
+                sheet_idx + 1,
+                s.placements.len()
+            );
+        }
+    }
+
     if pass {
         eprintln!("\n  ✅ CONVERGENCE TEST PASSED");
     } else {

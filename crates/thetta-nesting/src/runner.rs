@@ -93,6 +93,7 @@ pub fn run_nesting(
         config.compression_step,
         orientations.as_deref(),
         Some(&cancel),
+        None, // strip mode: allow expansion beyond sheet width
     );
     let _ = tx.send(NestingUpdate::Improved(compressed.clone()));
     let _ = tx.send(NestingUpdate::Finished(compressed));
@@ -229,8 +230,13 @@ pub fn run_nesting_multisheet(
             config.compression_step,
             Some(&sub_orientations),
             Some(&cancel),
+            Some(sheet.width), // multi-sheet: cap at sheet width
         );
-        if compressed.unplaced.is_empty() {
+        let strip_fits = compressed
+            .sheets
+            .first()
+            .map_or(false, |s| s.strip_length <= sheet.width + 1.0);
+        if compressed.unplaced.is_empty() && strip_fits {
             write_back_subsheet(
                 &mut ms_engine,
                 sheet_idx,

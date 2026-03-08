@@ -180,7 +180,7 @@ fn run_instance(
     );
     let gls_result = gls.run(|_| {}, |_, _, _, _| {}, time_limit, None);
 
-    let compressed = compress_strip(pieces, sheet, 5.0, orientations.as_deref(), None);
+    let compressed = compress_strip(pieces, sheet, 5.0, orientations.as_deref(), None, None);
 
     let result = if compressed.unplaced.len() <= gls_result.unplaced.len() {
         compressed
