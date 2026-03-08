@@ -84,7 +84,7 @@ fn main() {
     let mut final_result = None;
 
     loop {
-        match rx.recv_timeout(Duration::from_secs(120)) {
+        match rx.recv_timeout(Duration::from_secs(600)) {
             Ok(NestingUpdate::Improved(r)) => {
                 update_count += 1;
                 let placed: usize = r.sheets.iter().map(|s| s.placements.len()).sum();
@@ -112,7 +112,7 @@ fn main() {
                 break;
             }
             Err(_) => {
-                eprintln!("  ERROR: Timed out waiting for optimizer (120s)");
+                eprintln!("  ERROR: Timed out waiting for optimizer (600s)");
                 std::process::exit(1);
             }
         }

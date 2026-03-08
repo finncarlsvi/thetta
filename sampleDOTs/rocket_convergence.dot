@@ -1,0 +1,191 @@
+digraph RocketConvergence {
+  graph [
+    label="Rocket.step Convergence Attractor",
+    goal="Build and run the Rocket.step convergence test, fanning out to Codex and Opus for diagnosis and fixes until all pieces converge with no overlaps. Max 20 iterations.",
+    rankdir=LR,
+    default_fidelity="summary:medium",
+    default_max_retry=20,
+    retry_target="BuildTest",
+    fallback_retry_target="BuildTest"
+  ];
+
+  Start [shape=Mdiamond, label="Start"];
+  Exit  [shape=Msquare,  label="Exit"];
+
+  // ── Phase 1: Build ──────────────────────────────────────────────
+
+  BuildTest [
+    shape=parallelogram,
+    label="Build Convergence Test",
+    tool_command="set -eu\ncd /Users/finn.carlsvi/thetta\ncargo build --example rocket_convergence --features occt 2>&1 | tail -40\nif [ ${PIPESTATUS[0]} -ne 0 ]; then exit 1; fi\nprintf 'build-ok'"
+  ];
+
+  // ── Phase 2: Run ────────────────────────────────────────────────
+
+  RunTest [
+    shape=parallelogram,
+    label="Run Rocket Convergence",
+    timeout=120000,
+    tool_command="set -eu\ncd /Users/finn.carlsvi/thetta\ncargo run --example rocket_convergence --features occt -- ~/Downloads/Rocket.step 45 2>&1\nprintf '\\nexit-code-%d' $?"
+  ];
+
+  // ── Phase 3: Parse verdict ──────────────────────────────────────
+
+  ParseVerdict [
+    shape=box,
+    label="Parse Test Verdict",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    goal_gate=true,
+    retry_target="DiagnoseParallel",
+    prompt="Analyze the Rocket convergence test output. Look for 'CONVERGENCE TEST PASSED' or 'CONVERGENCE TEST FAILED'. Also check for build errors, panics, and timeout. Extract: (1) total pieces, (2) placed count, (3) unplaced count and IDs, (4) sheet count and utilization, (5) any FAILs with details. Return success ONLY if ALL pieces converged (PASSED). Return retry if the test failed or errored — include the failure details for the diagnosis step. Return fail only if the test infrastructure itself is broken beyond repair."
+  ];
+
+  // ── Phase 4: Parallel Diagnosis ─────────────────────────────────
+
+  DiagnoseParallel [shape=component, label="Diagnose (Parallel)"];
+
+  DiagnoseCodex [
+    shape=box,
+    label="Diagnose & Fix (Codex)",
+    llm_provider="openai",
+    llm_model="gpt-5.4-codex",
+    reasoning_effort="high",
+    fidelity="full",
+    prompt="You are debugging the thetta nesting engine. The Rocket.step convergence test FAILED — pieces were not all placed.\n\nKey files:\n- crates/thetta-nesting/src/runner.rs — multi-sheet pipeline\n- crates/thetta-nesting/src/gls.rs — GLS optimizer\n- crates/thetta-nesting/src/lbf.rs — LBF baseline placement\n- crates/thetta-nesting/src/multi_sheet.rs — multi-sheet engine\n- crates/thetta-nesting/src/engine.rs — single-sheet engine\n- crates/thetta-nesting/src/compression.rs — strip compression\n- crates/thetta-nesting/src/sampler.rs — sampling & refinement\n- crates/thetta-app/examples/rocket_convergence.rs — the test itself\n\nAnalyze the failure context passed from the previous step. Identify root cause(s) for pieces not converging. Consider:\n1. GLS not finding feasible solutions within time budget\n2. LBF not placing large/irregular pieces\n3. Write-back losing pieces between sub-engine and multi-sheet engine\n4. Compression dropping placements\n5. Orientation constraints preventing valid rotations\n6. Sheet separation/margin issues\n\nPropose and IMPLEMENT concrete fixes in the Rust source code. Prefer minimal, targeted changes. Run `cargo build --example rocket_convergence --features occt` to verify your changes compile."
+  ];
+
+  DiagnoseOpus [
+    shape=box,
+    label="Diagnose & Fix (Opus)",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    fidelity="full",
+    prompt="You are debugging the thetta nesting engine. The Rocket.step convergence test FAILED — pieces were not all placed.\n\nKey files:\n- crates/thetta-nesting/src/runner.rs — multi-sheet pipeline\n- crates/thetta-nesting/src/gls.rs — GLS optimizer\n- crates/thetta-nesting/src/lbf.rs — LBF baseline placement\n- crates/thetta-nesting/src/multi_sheet.rs — multi-sheet engine\n- crates/thetta-nesting/src/engine.rs — single-sheet engine\n- crates/thetta-nesting/src/compression.rs — strip compression\n- crates/thetta-nesting/src/sampler.rs — sampling & refinement\n- crates/thetta-app/examples/rocket_convergence.rs — the test itself\n\nAnalyze the failure context passed from the previous step. Identify root cause(s) for pieces not converging. Consider:\n1. GLS not finding feasible solutions within time budget\n2. LBF not placing large/irregular pieces\n3. Write-back losing pieces between sub-engine and multi-sheet engine\n4. Compression dropping placements\n5. Orientation constraints preventing valid rotations\n6. Sheet separation/margin issues\n\nPropose and IMPLEMENT concrete fixes in the Rust source code. Prefer minimal, targeted changes. Run `cargo build --example rocket_convergence --features occt` to verify your changes compile."
+  ];
+
+  DiagnoseJoin [shape=tripleoctagon, label="Diagnose Join"];
+
+  // ── Phase 5: Merge fixes ────────────────────────────────────────
+
+  MergeFixes [
+    shape=box,
+    label="Merge & Reconcile Fixes",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    prompt="Two independent agents (Codex and Opus) have each proposed and implemented fixes for the Rocket.step convergence failure. Review both sets of changes:\n\n1. If both made the same fix, keep one copy.\n2. If they made complementary fixes, combine them.\n3. If they conflict, choose the more robust approach or synthesize a better one.\n4. Ensure the merged result compiles: `cargo build --example rocket_convergence --features occt`.\n5. Run `cargo test --workspace --features occt` to check for regressions.\n\nSummarize what was merged and why."
+  ];
+
+  // ── Phase 6: Re-validate ────────────────────────────────────────
+
+  RebuildAfterFix [
+    shape=parallelogram,
+    label="Rebuild After Fix",
+    tool_command="set -eu\ncd /Users/finn.carlsvi/thetta\ncargo build --example rocket_convergence --features occt 2>&1 | tail -40\nif [ ${PIPESTATUS[0]} -ne 0 ]; then exit 1; fi\ncargo test --workspace --features occt 2>&1 | tail -60\nprintf '\\nrebuild-ok'"
+  ];
+
+  RerunTest [
+    shape=parallelogram,
+    label="Rerun Convergence Test",
+    timeout=120000,
+    tool_command="set -eu\ncd /Users/finn.carlsvi/thetta\ncargo run --example rocket_convergence --features occt -- ~/Downloads/Rocket.step 45 2>&1\nprintf '\\nexit-code-%d' $?"
+  ];
+
+  RevalidateVerdict [
+    shape=box,
+    label="Revalidate Verdict",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    goal_gate=true,
+    max_retries=20,
+    retry_target="DiagnoseParallel",
+    prompt="Analyze the re-run output. Same criteria as ParseVerdict: return success if CONVERGENCE TEST PASSED, retry if still failing (include failure details for next diagnosis round), fail if infrastructure is broken. Track iteration count — if we have retried many times, suggest more aggressive fixes (increasing time budget, relaxing constraints, or adding fallback placement strategies)."
+  ];
+
+  // ── Phase 7: Success summary ────────────────────────────────────
+
+  SuccessParallel [shape=component, label="Success Reports (Parallel)"];
+
+  SuccessCodex [
+    shape=box,
+    label="Success Report (Codex)",
+    llm_provider="openai",
+    llm_model="gpt-5.4-codex",
+    reasoning_effort="high",
+    prompt="The Rocket.step convergence test now PASSES. Review the final state of the nesting code and summarize:\n1. What fixes were applied across iterations\n2. Final piece count, sheet count, and utilization\n3. Any remaining technical debt or fragile areas\n4. Recommendations for regression prevention"
+  ];
+
+  SuccessOpus [
+    shape=box,
+    label="Success Report (Opus)",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    prompt="The Rocket.step convergence test now PASSES. Review the final state of the nesting code and summarize:\n1. Root cause chain — what was broken and why\n2. Quality of the fix — is it robust or a workaround?\n3. Test coverage gaps that should be addressed\n4. Whether the fix generalizes to other STEP files"
+  ];
+
+  SuccessJoin [shape=tripleoctagon, label="Success Join"];
+
+  FinalSummary [
+    shape=box,
+    label="Final Summary",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    prompt="Synthesize both success reports into a concise final summary. Include: iterations needed, root cause, fix description, final metrics, and next steps. Format as a markdown report suitable for committing to docs/."
+  ];
+
+  // ── Phase 8: Failure path ───────────────────────────────────────
+
+  FailureSummary [
+    shape=box,
+    label="Failure Summary",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    reasoning_effort="high",
+    prompt="The Rocket.step convergence test could not be fixed within the iteration budget. Summarize:\n1. All attempted fixes and their outcomes\n2. Remaining failure mode\n3. Hypotheses for root cause\n4. Recommended next steps for manual investigation\n5. Whether the issue is in the nesting algorithm, STEP import, or test harness"
+  ];
+
+  // ── Edges ───────────────────────────────────────────────────────
+
+  Start -> BuildTest;
+  BuildTest -> RunTest [condition="outcome=success", label="compiled"];
+  BuildTest -> DiagnoseParallel [condition="outcome=fail", label="build_error"];
+
+  RunTest -> ParseVerdict;
+
+  ParseVerdict -> SuccessParallel [condition="outcome=success", label="converged"];
+  ParseVerdict -> DiagnoseParallel [condition="outcome=retry", label="failed"];
+  ParseVerdict -> FailureSummary [condition="outcome=fail", label="infra_broken"];
+
+  DiagnoseParallel -> DiagnoseCodex;
+  DiagnoseParallel -> DiagnoseOpus;
+  DiagnoseCodex -> DiagnoseJoin;
+  DiagnoseOpus -> DiagnoseJoin;
+
+  DiagnoseJoin -> MergeFixes;
+
+  MergeFixes -> RebuildAfterFix;
+  RebuildAfterFix -> RerunTest [condition="outcome=success", label="builds"];
+  RebuildAfterFix -> DiagnoseParallel [condition="outcome=fail", label="fix_broke_build"];
+
+  RerunTest -> RevalidateVerdict;
+
+  RevalidateVerdict -> SuccessParallel [condition="outcome=success", label="converged"];
+  RevalidateVerdict -> DiagnoseParallel [condition="outcome=retry", label="still_failing"];
+  RevalidateVerdict -> FailureSummary [condition="outcome=fail", label="give_up"];
+
+  SuccessParallel -> SuccessCodex;
+  SuccessParallel -> SuccessOpus;
+  SuccessCodex -> SuccessJoin;
+  SuccessOpus -> SuccessJoin;
+
+  SuccessJoin -> FinalSummary;
+
+  FinalSummary -> Exit;
+  FailureSummary -> Exit;
+}

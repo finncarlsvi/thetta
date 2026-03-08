@@ -239,8 +239,10 @@ pub fn run_nesting_multisheet(
                 compressed.sheets.first(),
             );
             best_result = ms_engine.current_result();
-            let _ = tx.send(NestingUpdate::Improved(best_result.clone()));
         }
+        // Always send a progress update after each sheet's compression so
+        // the receiver doesn't starve waiting for messages.
+        let _ = tx.send(NestingUpdate::Improved(best_result.clone()));
     }
 
     let _ = tx.send(NestingUpdate::Finished(best_result));
