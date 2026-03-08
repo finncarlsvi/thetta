@@ -110,6 +110,29 @@ impl MultiSheetEngine {
         }
     }
 
+    /// Place a piece on a sheet without collision checks (for writing back
+    /// validated GLS/compression results).
+    pub fn force_place_on_sheet(
+        &mut self,
+        piece_idx: usize,
+        sheet_idx: usize,
+        x: f64,
+        y: f64,
+        rotation: f64,
+    ) {
+        if piece_idx >= self.all_pieces.len() || sheet_idx >= self.sheets.len() {
+            return;
+        }
+
+        if let Some(prev_sheet_idx) = self.assignment[piece_idx] {
+            if prev_sheet_idx != sheet_idx && prev_sheet_idx < self.sheets.len() {
+                self.sheets[prev_sheet_idx].remove_item(piece_idx);
+            }
+        }
+        self.sheets[sheet_idx].force_place_item(piece_idx, x, y, rotation);
+        self.assignment[piece_idx] = Some(sheet_idx);
+    }
+
     pub fn remove_piece(&mut self, piece_idx: usize) {
         if piece_idx >= self.assignment.len() {
             return;
@@ -134,6 +157,10 @@ impl MultiSheetEngine {
             sheet
                 .placements
                 .retain(|p| self.piece_sheet_idx(p.piece_id) == Some(sheet_idx));
+            // In multi-sheet mode, clamp strip_length to sheet width
+            if sheet.strip_length > self.sheet_config.width {
+                sheet.strip_length = self.sheet_config.width;
+            }
             if !sheet.placements.is_empty() {
                 sheets.push(sheet);
             }

@@ -277,7 +277,7 @@ fn write_back_subsheet(
     for (local_idx, &global_idx) in sheet_piece_indices.iter().enumerate() {
         let piece_id = sub_pieces[local_idx].id;
         if let Some(placement) = sheet.placements.iter().find(|p| p.piece_id == piece_id) {
-            let _ = ms_engine.place_on_sheet(
+            ms_engine.force_place_on_sheet(
                 global_idx,
                 sheet_idx,
                 placement.x,
