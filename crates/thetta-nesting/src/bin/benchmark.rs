@@ -124,7 +124,9 @@ fn collect_inputs(args: &Args) -> anyhow::Result<Vec<PathBuf>> {
     }
 }
 
-fn load_input(path: &Path) -> anyhow::Result<(Vec<Piece>, SheetConfig, Vec<RotationRange>, String)> {
+fn load_input(
+    path: &Path,
+) -> anyhow::Result<(Vec<Piece>, SheetConfig, Vec<RotationRange>, String)> {
     let text = fs::read_to_string(path)?;
     let value: serde_json::Value = serde_json::from_str(&text)?;
 
@@ -165,6 +167,8 @@ fn run_instance(
             orientations: orientations.clone(),
             ..LbfConfig::default()
         },
+        None,
+        |_| {},
     );
 
     let mut gls = GLSOptimizer::new(
@@ -174,9 +178,9 @@ fn run_instance(
             ..OptimizerConfig::default()
         },
     );
-    let gls_result = gls.run(|_| {}, time_limit, None);
+    let gls_result = gls.run(|_| {}, |_, _, _, _| {}, time_limit, None);
 
-    let compressed = compress_strip(pieces, sheet, 5.0, orientations.as_deref());
+    let compressed = compress_strip(pieces, sheet, 5.0, orientations.as_deref(), None);
 
     let result = if compressed.unplaced.len() <= gls_result.unplaced.len() {
         compressed

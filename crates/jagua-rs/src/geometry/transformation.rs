@@ -32,7 +32,10 @@ impl Transformation {
         let rotated_a = (ax * cos_b - ay * sin_b, ax * sin_b + ay * cos_b);
         Self {
             rotation,
-            translation: (rotated_a.0 + other.translation.0, rotated_a.1 + other.translation.1),
+            translation: (
+                rotated_a.0 + other.translation.0,
+                rotated_a.1 + other.translation.1,
+            ),
         }
     }
 

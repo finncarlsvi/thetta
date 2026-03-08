@@ -8,11 +8,13 @@ use std::time::{Duration, Instant};
 
 use egui::Color32;
 use jagua_rs::geometry::geo_enums::RotationRange;
+use thetta_geometry::polygon_ops;
 use thetta_geometry::types::{NestingResult, Piece, PieceId, SheetConfig};
 use thetta_nesting::benchmark::load_benchmark;
+use thetta_nesting::conversion::rotation_range_to_samples;
 use thetta_nesting::gls::OptimizerConfig;
 use thetta_nesting::optimizer::run_optimizer;
-use thetta_nesting::runner::NestingUpdate;
+use thetta_nesting::runner::{NestingMode, NestingUpdate};
 use thetta_step::{
     ExtractionConfig, StepExportError, StepImportError, StepImportResult, StepModel, StepPieceRef,
     ThicknessInfo, export_all_sheets, extract_pieces_for_thickness, import_step,
@@ -38,6 +40,12 @@ pub struct NestingStats {
     pub pieces_total: usize,
     pub elapsed: Duration,
     pub iterations: usize,
+    pub gls_iteration: usize,
+    pub gls_overlap: f64,
+    pub gls_best_overlap: f64,
+    pub gls_feasible_count: usize,
+    pub sheet_count: usize,
+    pub too_large_for_sheet: usize,
 }
 
 impl Default for NestingStats {
@@ -49,6 +57,12 @@ impl Default for NestingStats {
             pieces_total: 0,
             elapsed: Duration::ZERO,
             iterations: 0,
+            gls_iteration: 0,
+            gls_overlap: 0.0,
+            gls_best_overlap: 0.0,
+            gls_feasible_count: 0,
+            sheet_count: 0,
+            too_large_for_sheet: 0,
         }
     }
 }
@@ -58,6 +72,7 @@ pub struct AppState {
     pub pieces: Vec<Piece>,
     pub piece_orientations: Vec<RotationRange>,
     pub benchmark: Option<LoadedBenchmark>,
+    pub nesting_mode: NestingMode,
     pub sheet_config: SheetConfig,
     pub optimizer_config: OptimizerConfig,
     pub current_result: Option<NestingResult>,
@@ -80,6 +95,8 @@ pub struct AppState {
     pub step_export_rx: Option<Receiver<Result<Vec<PathBuf>, StepExportError>>>,
     pub step_source_path: Option<PathBuf>,
     pub step_config: ExtractionConfig,
+    pub step_dialog_rx: Option<Receiver<Option<PathBuf>>>,
+    pub export_dialog_rx: Option<Receiver<Option<(PathBuf, String)>>>,
 }
 
 impl Default for AppState {
@@ -89,6 +106,7 @@ impl Default for AppState {
             pieces: vec![],
             piece_orientations: vec![],
             benchmark: None,
+            nesting_mode: NestingMode::Sheet,
             sheet_config: SheetConfig::default(),
             optimizer_config: OptimizerConfig::default(),
             current_result: None,
@@ -111,6 +129,8 @@ impl Default for AppState {
             step_export_rx: None,
             step_source_path: None,
             step_config: ExtractionConfig::default(),
+            step_dialog_rx: None,
+            export_dialog_rx: None,
         }
     }
 }
@@ -144,6 +164,7 @@ impl AppState {
         });
 
         self.benchmark = None;
+        self.nesting_mode = NestingMode::Sheet;
         self.assign_file_color(path);
         self.stats.pieces_total = self.pieces.len();
         self.step_export_status = None;
@@ -165,6 +186,7 @@ impl AppState {
             name: meta.name,
             strip_height: meta.strip_height,
         });
+        self.nesting_mode = NestingMode::Strip;
         self.current_result = None;
         self.selected_piece = None;
 
@@ -187,10 +209,32 @@ impl AppState {
             (!self.piece_orientations.is_empty()).then_some(self.piece_orientations.clone());
         let sheet = self.sheet_config.clone();
         let config = self.optimizer_config.clone();
+        let mode = self.nesting_mode;
         let cancel_bg = cancel.clone();
 
         thread::spawn(move || {
-            run_optimizer(pieces, sheet, orientations, config, tx, cancel_bg);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_optimizer(
+                    pieces,
+                    sheet,
+                    orientations,
+                    config,
+                    mode,
+                    tx.clone(),
+                    cancel_bg,
+                );
+            }));
+            if let Err(panic) = result {
+                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown error in optimizer".to_string()
+                };
+                eprintln!("optimizer panic: {msg}");
+                // Channel drop will signal disconnected to poll_updates
+            }
         });
 
         self.update_rx = Some(rx);
@@ -203,6 +247,9 @@ impl AppState {
     pub fn stop_optimizer(&mut self) {
         if let Some(cancel) = &self.cancel_token {
             cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(start) = self.run_started_at {
+            self.stats.elapsed = start.elapsed();
         }
         self.optimizer_running = false;
         self.cancel_token = None;
@@ -222,6 +269,17 @@ impl AppState {
                     finished = true;
                     break;
                 }
+                Ok(NestingUpdate::Progress {
+                    iteration,
+                    total_overlap,
+                    best_overlap,
+                    feasible_count,
+                }) => {
+                    self.stats.gls_iteration = iteration;
+                    self.stats.gls_overlap = total_overlap;
+                    self.stats.gls_best_overlap = best_overlap;
+                    self.stats.gls_feasible_count = feasible_count;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     finished = true;
@@ -230,14 +288,55 @@ impl AppState {
             }
         }
 
-        if let Some(start) = self.run_started_at {
-            self.stats.elapsed = start.elapsed();
+        if self.optimizer_running {
+            if let Some(start) = self.run_started_at {
+                self.stats.elapsed = start.elapsed();
+            }
         }
 
         if finished {
             self.optimizer_running = false;
             self.update_rx = None;
             self.cancel_token = None;
+        }
+    }
+
+    pub fn poll_step_dialog(&mut self) -> Option<PathBuf> {
+        let rx = self.step_dialog_rx.as_ref()?;
+        match rx.try_recv() {
+            Ok(Some(path)) => {
+                self.step_dialog_rx = None;
+                Some(path)
+            }
+            Ok(None) => {
+                // User cancelled
+                self.step_dialog_rx = None;
+                None
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.step_dialog_rx = None;
+                None
+            }
+        }
+    }
+
+    pub fn poll_export_dialog(&mut self) -> Option<(PathBuf, String)> {
+        let rx = self.export_dialog_rx.as_ref()?;
+        match rx.try_recv() {
+            Ok(Some(result)) => {
+                self.export_dialog_rx = None;
+                Some(result)
+            }
+            Ok(None) => {
+                self.export_dialog_rx = None;
+                None
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.export_dialog_rx = None;
+                None
+            }
         }
     }
 
@@ -414,21 +513,57 @@ impl AppState {
     fn apply_result(&mut self, result: NestingResult) {
         let placed = result
             .sheets
-            .first()
+            .iter()
             .map(|s| s.placements.len())
-            .unwrap_or(0);
-        let utilization = result.sheets.first().map(|s| s.utilization).unwrap_or(0.0) * 100.0;
+            .sum::<usize>();
+        let total_sheet_area = result
+            .sheets
+            .iter()
+            .map(|s| s.strip_length.max(0.0) * self.sheet_config.height.max(0.0))
+            .sum::<f64>();
+        let total_piece_area = result
+            .sheets
+            .iter()
+            .flat_map(|s| &s.placements)
+            .filter_map(|p| self.pieces.iter().find(|piece| piece.id == p.piece_id))
+            .map(|piece| polygon_ops::area(&piece.polygon))
+            .sum::<f64>();
+        let utilization = if total_sheet_area > 0.0 {
+            (total_piece_area / total_sheet_area) * 100.0
+        } else {
+            0.0
+        };
         let strip_length = result
             .sheets
-            .first()
+            .iter()
             .map(|s| s.strip_length)
-            .unwrap_or(self.sheet_config.width);
+            .fold(0.0_f64, f64::max);
 
         self.stats.pieces_placed = placed;
         self.stats.pieces_total = self.pieces.len();
         self.stats.utilization_pct = utilization;
         self.stats.strip_length = strip_length;
+        self.stats.sheet_count = result.sheets.len();
+        self.stats.too_large_for_sheet = self.count_oversized_unplaced(&result);
         self.current_result = Some(result);
+    }
+
+    fn count_oversized_unplaced(&self, result: &NestingResult) -> usize {
+        result
+            .unplaced
+            .iter()
+            .filter(|piece_id| {
+                let Some(piece_idx) = self.pieces.iter().position(|p| &p.id == *piece_id) else {
+                    return false;
+                };
+                let orientation = self
+                    .piece_orientations
+                    .get(piece_idx)
+                    .unwrap_or(&RotationRange::Continuous);
+                let samples = rotation_range_to_samples(orientation, 32);
+                !piece_fits_sheet(&self.pieces[piece_idx], &self.sheet_config, &samples)
+            })
+            .count()
     }
 
     fn assign_file_color(&mut self, path: &Path) {
@@ -456,6 +591,7 @@ impl AppState {
             .iter()
             .position(|g| (g.value_mm - result.selected_thickness_mm).abs() < 1e-9)
             .unwrap_or(0);
+        self.nesting_mode = NestingMode::Sheet;
         self.step_session = Some(Arc::new(Mutex::new(result.model)));
         self.step_error = None;
         self.replace_step_pieces(result.pieces, result.piece_refs);
@@ -511,4 +647,16 @@ impl AppState {
         self.step_export_status = None;
         self.step_source_path = None;
     }
+}
+
+fn piece_fits_sheet(piece: &Piece, sheet: &SheetConfig, rotations: &[f64]) -> bool {
+    rotations.iter().any(|rotation| {
+        let rotated = polygon_ops::rotate(
+            &piece.polygon,
+            *rotation,
+            thetta_geometry::types::Point2D { x: 0.0, y: 0.0 },
+        );
+        let bbox = polygon_ops::bounding_box(&rotated);
+        bbox.width() <= sheet.width + 1e-9 && bbox.height() <= sheet.height + 1e-9
+    })
 }

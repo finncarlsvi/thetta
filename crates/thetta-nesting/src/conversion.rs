@@ -29,7 +29,10 @@ pub fn pieces_to_sp_instance(
     orientations: Option<&[Vec<f64>]>,
 ) -> Result<SPInstance> {
     ensure!(!pieces.is_empty(), "at least one piece is required");
-    ensure!(sheet.height.is_finite() && sheet.height > 0.0, "sheet.height must be > 0");
+    ensure!(
+        sheet.height.is_finite() && sheet.height > 0.0,
+        "sheet.height must be > 0"
+    );
 
     if let Some(per_piece) = orientations {
         ensure!(
@@ -120,8 +123,11 @@ pub fn to_external_transformation(
 }
 
 fn polygon_to_ext_simple_polygon(poly: &Polygon) -> Result<ExtSPolygon> {
-    ensure!(poly.holes.is_empty(), "holes are not supported yet");
-    ensure!(poly.outer.len() >= 3, "polygon must have at least 3 vertices");
+    // Holes are ignored for nesting — only the outer contour matters for placement
+    ensure!(
+        poly.outer.len() >= 3,
+        "polygon must have at least 3 vertices"
+    );
 
     let mut points = poly
         .outer
@@ -196,7 +202,11 @@ mod tests {
 
     #[test]
     fn orientation_mapping_variants() {
-        let pieces = vec![rect_piece(1, 5.0, 5.0), rect_piece(2, 5.0, 5.0), rect_piece(3, 5.0, 5.0)];
+        let pieces = vec![
+            rect_piece(1, 5.0, 5.0),
+            rect_piece(2, 5.0, 5.0),
+            rect_piece(3, 5.0, 5.0),
+        ];
         let sheet = SheetConfig {
             width: 100.0,
             height: 100.0,
@@ -205,9 +215,18 @@ mod tests {
         let orientations = vec![vec![0.0], vec![], vec![0.0, std::f64::consts::FRAC_PI_2]];
         let instance = pieces_to_sp_instance(&pieces, &sheet, Some(&orientations)).unwrap();
 
-        assert!(matches!(instance.item(0).allowed_rotation, RotationRange::None));
-        assert!(matches!(instance.item(1).allowed_rotation, RotationRange::None));
-        assert!(matches!(instance.item(2).allowed_rotation, RotationRange::Discrete(_)));
+        assert!(matches!(
+            instance.item(0).allowed_rotation,
+            RotationRange::None
+        ));
+        assert!(matches!(
+            instance.item(1).allowed_rotation,
+            RotationRange::None
+        ));
+        assert!(matches!(
+            instance.item(2).allowed_rotation,
+            RotationRange::Discrete(_)
+        ));
     }
 
     #[test]

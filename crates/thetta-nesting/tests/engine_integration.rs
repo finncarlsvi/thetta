@@ -87,7 +87,8 @@ fn load_jakobs1_parses_25_items() {
 fn lbf_on_jakobs1_places_all_without_collision() {
     let (pieces, sheet, meta) = load_benchmark(&benchmark_path("jakobs1")).unwrap();
 
-    let mut engine = NestingEngine::new_with_orientations(&pieces, &sheet, Some(&meta.orientations));
+    let mut engine =
+        NestingEngine::new_with_orientations(&pieces, &sheet, Some(&meta.orientations));
     let result = run_lbf(
         &mut engine,
         LbfConfig {
@@ -95,6 +96,8 @@ fn lbf_on_jakobs1_places_all_without_collision() {
             rotations_n: 4,
             orientations: Some(meta.orientations),
         },
+        None,
+        |_| {},
     );
 
     assert_eq!(result.sheets[0].placements.len(), 25);
@@ -107,6 +110,7 @@ fn lbf_on_jakobs1_places_all_without_collision() {
 }
 
 fn benchmark_path(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../../research/repos/sparrow/data/input/{name}.json"))
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../research/repos/sparrow/data/input/{name}.json"
+    ))
 }

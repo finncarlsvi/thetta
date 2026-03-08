@@ -35,7 +35,7 @@ impl Default for ExtractionConfig {
     fn default() -> Self {
         Self {
             mesh_tolerance_mm: 0.5,
-            thickness_bucket_mm: 0.1,
+            thickness_bucket_mm: 0.25,
             max_points_per_edge: 200,
         }
     }

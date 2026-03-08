@@ -2,11 +2,11 @@ use anyhow::{Result, bail};
 
 use crate::collision_detection::CDEConfig;
 use crate::entities::Item;
+use crate::geometry::DTransformation;
 use crate::geometry::OriginalShape;
 use crate::geometry::geo_enums::RotationRange;
 use crate::geometry::primitives::{Point, Rect, SPolygon};
 use crate::geometry::shape_modification::ShapeModifyConfig;
-use crate::geometry::DTransformation;
 use crate::io::ext_repr::{ExtItem, ExtSPolygon, ExtShape};
 
 #[derive(Clone, Debug, Copy)]

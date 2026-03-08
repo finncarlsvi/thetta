@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::collision_detection::hazards::{Hazard, HazardEntity};
 use crate::collision_detection::CDEngine;
+use crate::collision_detection::hazards::{Hazard, HazardEntity};
 use crate::entities::{Container, Item, PItemKey, PlacedItem};
 use crate::geometry::DTransformation;
 
@@ -91,11 +91,15 @@ impl Layout {
     }
 
     pub fn remove_item(&mut self, pk: PItemKey) -> PlacedItem {
-        let pi = self.placed_items.remove(&pk).expect("key is not valid anymore");
-        self.cde.deregister_hazard_by_entity(HazardEntity::PlacedItem {
-            pk,
-            item_id: pi.item_id,
-        });
+        let pi = self
+            .placed_items
+            .remove(&pk)
+            .expect("key is not valid anymore");
+        self.cde
+            .deregister_hazard_by_entity(HazardEntity::PlacedItem {
+                pk,
+                item_id: pi.item_id,
+            });
         pi
     }
 
@@ -105,7 +109,10 @@ impl Layout {
 
     pub fn is_feasible(&self) -> bool {
         self.placed_items.iter().all(|(pk, pi)| {
-            let hkey = self.cde.haz_key_from_pi_key(*pk).expect("hazard key present");
+            let hkey = self
+                .cde
+                .haz_key_from_pi_key(*pk)
+                .expect("hazard key present");
             !self.cde.detect_poly_collision(&pi.shape, &hkey)
         })
     }

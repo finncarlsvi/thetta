@@ -21,7 +21,10 @@ pub fn l_shape(width: f64, height: f64, cutout: f64) -> Polygon {
         outer: vec![
             Point2D { x: 0.0, y: 0.0 },
             Point2D { x: width, y: 0.0 },
-            Point2D { x: width, y: cutout },
+            Point2D {
+                x: width,
+                y: cutout,
+            },
             Point2D {
                 x: cutout,
                 y: cutout,

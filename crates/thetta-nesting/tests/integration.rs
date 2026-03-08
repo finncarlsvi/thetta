@@ -1,7 +1,7 @@
 use thetta_geometry::test_shapes;
 use thetta_geometry::types::{Piece, PieceId, SheetConfig};
 use thetta_nesting::engine::NestingEngine;
-use thetta_nesting::lbf::{run_lbf, LbfConfig};
+use thetta_nesting::lbf::{LbfConfig, run_lbf};
 
 fn rect_piece(id: u64, w: f64, h: f64) -> Piece {
     Piece {
@@ -60,6 +60,8 @@ fn lbf_on_10_rectangles_places_all_without_overlap() {
             rotations_n: 4,
             ..LbfConfig::default()
         },
+        None,
+        |_| {},
     );
 
     assert_eq!(result.sheets[0].placements.len(), 10);
@@ -85,6 +87,8 @@ fn lbf_with_too_many_pieces_expands_strip() {
             rotations_n: 1,
             ..LbfConfig::default()
         },
+        None,
+        |_| {},
     );
 
     assert_eq!(result.sheets[0].placements.len(), 10);

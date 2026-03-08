@@ -1,5 +1,6 @@
 use crate::conversion::{
-    default_orientations, pieces_to_sp_instance, to_external_transformation, to_internal_transformation,
+    default_orientations, pieces_to_sp_instance, to_external_transformation,
+    to_internal_transformation,
 };
 use crate::hazard_counter::CountingCollector;
 use jagua_rs::entities::{Instance, PItemKey};
@@ -156,8 +157,8 @@ impl NestingEngine {
         let d_transf = to_internal_transformation(&self.instance, idx, x, y, rotation);
         let transformed = item.shape_cd.transform_clone(&d_transf.compose());
 
-        let own_hkey = self.pk_map[idx]
-            .and_then(|pk| self.problem.layout.cde().haz_key_from_pi_key(pk));
+        let own_hkey =
+            self.pk_map[idx].and_then(|pk| self.problem.layout.cde().haz_key_from_pi_key(pk));
         let mut collector = CountingCollector::new(own_hkey);
         self.problem
             .layout
@@ -194,7 +195,11 @@ impl NestingEngine {
             .pieces
             .iter()
             .enumerate()
-            .filter_map(|(idx, p)| self.pk_map[idx].is_some().then_some(polygon_ops::area(&p.polygon)))
+            .filter_map(|(idx, p)| {
+                self.pk_map[idx]
+                    .is_some()
+                    .then_some(polygon_ops::area(&p.polygon))
+            })
             .sum::<f64>();
 
         let total_area = self.strip_width() * self.sheet.height;

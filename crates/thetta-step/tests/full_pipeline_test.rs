@@ -22,7 +22,10 @@ fn test_data_dir() -> std::path::PathBuf {
 fn full_pipeline_single_box() {
     let _lock = OCCT_LOCK.lock().unwrap();
     let path = test_data_dir().join("single_box_20x10x2.step");
-    assert!(path.exists(), "Run gen_test_step first to generate test data");
+    assert!(
+        path.exists(),
+        "Run gen_test_step first to generate test data"
+    );
 
     // 1. Import
     let cfg = ExtractionConfig::default();
@@ -87,7 +90,10 @@ fn full_pipeline_single_box() {
 fn full_pipeline_multi_thickness() {
     let _lock = OCCT_LOCK.lock().unwrap();
     let path = test_data_dir().join("multi_thickness.step");
-    assert!(path.exists(), "Run gen_test_step first to generate test data");
+    assert!(
+        path.exists(),
+        "Run gen_test_step first to generate test data"
+    );
 
     let cfg = ExtractionConfig::default();
 

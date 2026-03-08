@@ -67,7 +67,10 @@ pub fn load_benchmark(path: &Path) -> Result<(Vec<Piece>, SheetConfig, Benchmark
         }
     }
 
-    ensure!(!pieces.is_empty(), "benchmark must contain at least one demanded piece");
+    ensure!(
+        !pieces.is_empty(),
+        "benchmark must contain at least one demanded piece"
+    );
 
     let total_area = pieces
         .iter()
@@ -131,7 +134,10 @@ fn shape_to_polygon(shape: &BenchmarkShape) -> Result<Polygon> {
             width,
             height,
         } => {
-            ensure!(*width > 0.0 && *height > 0.0, "rectangle must have positive dimensions");
+            ensure!(
+                *width > 0.0 && *height > 0.0,
+                "rectangle must have positive dimensions"
+            );
             Ok(Polygon {
                 outer: vec![
                     Point2D {
@@ -171,14 +177,13 @@ fn shape_to_polygon(shape: &BenchmarkShape) -> Result<Polygon> {
 }
 
 fn ring_from_ext(sp: &ExtSPolygon) -> Result<Vec<Point2D>> {
-    let mut pts = sp
-        .0
-        .iter()
-        .map(|(x, y)| Point2D {
-            x: *x as f64,
-            y: *y as f64,
-        })
-        .collect::<Vec<_>>();
+    let mut pts =
+        sp.0.iter()
+            .map(|(x, y)| Point2D {
+                x: *x as f64,
+                y: *y as f64,
+            })
+            .collect::<Vec<_>>();
 
     if pts.len() >= 2 && pts.first() == pts.last() {
         pts.pop();

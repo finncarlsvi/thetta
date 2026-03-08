@@ -16,7 +16,38 @@ pub fn normalize_polygon(mut polygon: Polygon) -> Result<Polygon, String> {
     polygon.holes = holes;
 
     enforce_winding(&mut polygon);
+
+    // Center polygon at bbox midpoint so the nesting engine works with
+    // origin-relative coordinates (better f32 precision, correct rotation).
+    center_at_origin(&mut polygon);
+
     Ok(polygon)
+}
+
+fn center_at_origin(polygon: &mut Polygon) {
+    let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in &polygon.outer {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+    let dx = (min_x + max_x) * 0.5;
+    let dy = (min_y + max_y) * 0.5;
+    if dx.abs() < 1e-9 && dy.abs() < 1e-9 {
+        return;
+    }
+    for p in &mut polygon.outer {
+        p.x -= dx;
+        p.y -= dy;
+    }
+    for hole in &mut polygon.holes {
+        for p in hole {
+            p.x -= dx;
+            p.y -= dy;
+        }
+    }
 }
 
 fn normalize_ring(points: &[Point2D]) -> Result<Vec<Point2D>, String> {

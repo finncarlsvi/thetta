@@ -127,10 +127,7 @@ fn snap_sample(sample: Sample, rotation_range: Option<&RotationRange>) -> Sample
         }
     };
 
-    Sample {
-        rotation,
-        ..sample
-    }
+    Sample { rotation, ..sample }
 }
 
 fn circular_distance(a: f64, b: f64) -> f64 {

@@ -51,9 +51,10 @@ pub fn export_sheet(
     // Use real OCCT export if available and source is a STEP file
     #[cfg(feature = "occt")]
     {
-        let is_step = model.source_path().extension().is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("step") || ext.eq_ignore_ascii_case("stp")
-        });
+        let is_step = model
+            .source_path()
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("step") || ext.eq_ignore_ascii_case("stp"));
         if is_step {
             return export_sheet_occt(model, piece_refs, sheet, output_path);
         }

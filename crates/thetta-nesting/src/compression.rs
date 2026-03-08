@@ -1,6 +1,8 @@
 use crate::engine::NestingEngine;
 use crate::lbf::{LbfConfig, run_lbf};
 use jagua_rs::geometry::geo_enums::RotationRange;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use thetta_geometry::types::{NestingResult, Piece, SheetConfig};
 
 pub fn compress_strip(
@@ -8,7 +10,10 @@ pub fn compress_strip(
     sheet: SheetConfig,
     compression_step: f64,
     orientations: Option<&[RotationRange]>,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> NestingResult {
+    let is_cancelled = || cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
+
     let mut engine = NestingEngine::new_with_orientations(pieces, &sheet, orientations);
     let mut best = run_lbf(
         &mut engine,
@@ -16,12 +21,18 @@ pub fn compress_strip(
             orientations: orientations.map(|o| o.to_vec()),
             ..LbfConfig::default()
         },
+        cancel,
+        |_| {},
     );
 
     let mut low = (sheet.width * 0.2).max(1.0);
     let mut high = engine.strip_width().max(1.0);
 
     for _ in 0..8 {
+        if is_cancelled() {
+            break;
+        }
+
         let mid = (low + high) * 0.5;
         engine.change_strip_width(mid);
         engine.clear_placements();
@@ -32,6 +43,8 @@ pub fn compress_strip(
                 orientations: orientations.map(|o| o.to_vec()),
                 ..LbfConfig::default()
             },
+            cancel,
+            |_| {},
         );
 
         if candidate.unplaced.is_empty() {

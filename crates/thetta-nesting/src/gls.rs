@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use thetta_geometry::types::NestingResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,51 +49,80 @@ impl GLSOptimizer {
         }
     }
 
-    pub fn run<F>(
+    pub fn run<F, P>(
         &mut self,
         mut on_update: F,
-        stop_after: Duration,
+        mut on_progress: P,
+        _stop_after: Duration,
         cancel: Option<&Arc<AtomicBool>>,
     ) -> NestingResult
     where
         F: FnMut(NestingResult),
+        P: FnMut(usize, f64, f64, usize),
     {
-        let start = Instant::now();
-
         let sheet = self.engine.sheet_config().clone();
+
+        // Only randomize pieces that LBF left with collisions or unplaced.
+        // Keep good LBF placements intact.
         for idx in 0..self.engine.piece_count() {
-            let s = uniform_sample(&mut self.rng, &sheet, self.engine.rotation_range(idx));
-            self.engine.force_place_item(idx, s.x, s.y, s.rotation);
+            let has_collision = self
+                .engine
+                .placement_of(idx)
+                .map(|p| self.engine.collision_cost(idx, p.x, p.y, p.rotation) > 0.0)
+                .unwrap_or(true); // unplaced → randomize
+            if has_collision {
+                let s = uniform_sample(&mut self.rng, &sheet, self.engine.rotation_range(idx));
+                self.engine.force_place_item(idx, s.x, s.y, s.rotation);
+            }
         }
 
-        let mut best_total_overlap = total_overlap(&self.engine);
+        // If LBF already produced a feasible solution, record it
+        let initial_overlap = total_overlap(&self.engine);
+        if initial_overlap == 0.0 {
+            self.engine.fit_strip();
+            let result = self.engine.current_result();
+            if result.unplaced.is_empty() {
+                self.best_feasible = Some(result);
+            }
+        }
 
-        let cancelled = |c: &Option<&Arc<AtomicBool>>| {
-            c.as_ref().is_some_and(|a| a.load(Ordering::Relaxed))
-        };
+        let mut best_total_overlap = initial_overlap;
+        let mut iteration: usize = 0;
+        let mut feasible_count: usize = 0;
 
-        while start.elapsed() < stop_after && !cancelled(&cancel) {
+        let cancelled =
+            |c: &Option<&Arc<AtomicBool>>| c.as_ref().is_some_and(|a| a.load(Ordering::Relaxed));
+
+        while !cancelled(&cancel) {
+            iteration += 1;
+
             let mut best_idx = None;
-            let mut best_weighted = f64::NEG_INFINITY;
+            let mut best_weighted = 0.0_f64; // only consider pieces with actual collisions
 
             for idx in 0..self.engine.piece_count() {
-                let probe = if let Some(p) = self.engine.placement_of(idx) {
+                let cost = if let Some(p) = self.engine.placement_of(idx) {
                     self.engine.collision_cost(idx, p.x, p.y, p.rotation)
                 } else {
                     1_000.0
-                } * self.penalty_weights[idx];
+                };
+                let probe = cost * self.penalty_weights[idx];
                 if probe > best_weighted {
                     best_weighted = probe;
                     best_idx = Some(idx);
                 }
             }
 
-            let Some(idx) = best_idx else { break };
+            let Some(idx) = best_idx else {
+                // All pieces are collision-free — GLS has nothing to improve
+                break;
+            };
 
             let mut sampled = Vec::with_capacity(self.config.samples_per_move);
             for _ in 0..self.config.samples_per_move {
                 let sample = uniform_sample(&mut self.rng, &sheet, self.engine.rotation_range(idx));
-                let score = self.engine.collision_cost(idx, sample.x, sample.y, sample.rotation);
+                let score = self
+                    .engine
+                    .collision_cost(idx, sample.x, sample.y, sample.rotation);
                 sampled.push((sample, score));
             }
 
@@ -120,7 +149,8 @@ impl GLSOptimizer {
             }
 
             if let Some(cand) = best_candidate {
-                self.engine.force_place_item(idx, cand.x, cand.y, cand.rotation);
+                self.engine
+                    .force_place_item(idx, cand.x, cand.y, cand.rotation);
             }
 
             for idx in 0..self.engine.piece_count() {
@@ -134,17 +164,44 @@ impl GLSOptimizer {
             }
 
             let current_overlap = total_overlap(&self.engine);
-            let current = self.engine.current_result();
             if current_overlap < best_total_overlap {
                 best_total_overlap = current_overlap;
-                on_update(current.clone());
             }
-            if current.unplaced.is_empty() && current_overlap == 0.0 {
+            if current_overlap == 0.0 {
                 self.engine.fit_strip();
                 let feasible = self.engine.current_result();
-                self.best_feasible = Some(feasible.clone());
-                on_update(feasible);
+                if feasible.unplaced.is_empty() {
+                    feasible_count += 1;
+                    let is_better = self
+                        .best_feasible
+                        .as_ref()
+                        .map(|prev| {
+                            let prev_strip = prev
+                                .sheets
+                                .first()
+                                .map(|s| s.strip_length)
+                                .unwrap_or(f64::MAX);
+                            let new_strip = feasible
+                                .sheets
+                                .first()
+                                .map(|s| s.strip_length)
+                                .unwrap_or(f64::MAX);
+                            new_strip < prev_strip
+                        })
+                        .unwrap_or(true);
+                    if is_better {
+                        self.best_feasible = Some(feasible.clone());
+                        on_update(feasible);
+                    }
+                }
             }
+
+            on_progress(
+                iteration,
+                current_overlap,
+                best_total_overlap,
+                feasible_count,
+            );
         }
 
         self.best_feasible

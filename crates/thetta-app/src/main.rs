@@ -22,7 +22,6 @@ fn main() -> eframe::Result {
             Ok(Box::new(ThettaApp {
                 state: AppState::default(),
                 viewport_state: ViewportState::default(),
-                path_input: String::new(),
                 error_text: None,
             }))
         }),
@@ -32,7 +31,6 @@ fn main() -> eframe::Result {
 struct ThettaApp {
     state: AppState,
     viewport_state: ViewportState,
-    path_input: String,
     error_text: Option<String>,
 }
 
@@ -42,33 +40,29 @@ impl eframe::App for ThettaApp {
         self.state.poll_step_import();
         self.state.poll_step_export();
 
+        // Poll file dialogs (non-blocking)
+        if let Some(path) = self.state.poll_step_dialog() {
+            self.error_text = None;
+            self.state.start_step_import(path);
+        }
+        if let Some((out_dir, file_stem)) = self.state.poll_export_dialog() {
+            self.state.start_step_export(out_dir, file_stem);
+        }
+
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
             self.state.delete_selected_piece();
         }
 
-        let actions = show_side_panel(ctx, &mut self.state, &mut self.path_input);
+        let actions = show_side_panel(ctx, &mut self.state);
         for action in actions {
             match action {
-                PanelAction::LoadPath(path) => {
-                    if path.trim().is_empty() {
-                        continue;
-                    }
-                    match self.state.load_json_file(std::path::Path::new(path.trim())) {
-                        Ok(_) => {
-                            self.error_text = None;
-                            self.state.start_optimizer();
-                        }
-                        Err(e) => self.error_text = Some(e),
-                    }
-                }
-                PanelAction::LoadStep(path) => {
-                    self.error_text = None;
-                    self.state.start_step_import(path);
+                PanelAction::OpenStepDialog => {
+                    self.state.step_dialog_rx = Some(native_dialog::request_step_file());
                 }
                 PanelAction::SelectThickness(idx) => {
                     self.state.select_thickness(idx);
                 }
-                PanelAction::ExportStep => {
+                PanelAction::OpenExportDialog => {
                     let default_name = self
                         .state
                         .step_source_path
@@ -77,11 +71,8 @@ impl eframe::App for ThettaApp {
                         .and_then(|s| s.to_str())
                         .map(|s| format!("{s}_nested.step"))
                         .unwrap_or_else(|| "nested.step".to_string());
-                    if let Some((out_dir, file_stem)) =
-                        native_dialog::pick_export_target(&default_name)
-                    {
-                        self.state.start_step_export(out_dir, file_stem);
-                    }
+                    self.state.export_dialog_rx =
+                        Some(native_dialog::request_export_target(default_name));
                 }
                 PanelAction::ToggleRun => {
                     if self.state.optimizer_running {

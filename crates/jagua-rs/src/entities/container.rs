@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::collision_detection::{CDEConfig, CDEngine};
 use crate::collision_detection::hazards::{Hazard, HazardEntity};
+use crate::collision_detection::{CDEConfig, CDEngine};
 use crate::geometry::primitives::{Point, Rect, SPolygon};
 use crate::geometry::shape_modification::ShapeModifyConfig;
 

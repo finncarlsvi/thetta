@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use egui::emath::RectTransform;
+use egui::epaint::Mesh;
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use thetta_geometry::polygon_ops;
 use thetta_geometry::types::{PieceId, Placement, Point2D, Polygon};
@@ -19,23 +20,36 @@ impl Default for ViewportState {
     }
 }
 
-pub fn show_viewport(ui: &mut egui::Ui, state: &mut ViewportState, app: &AppState) -> Option<PieceId> {
+pub fn show_viewport(
+    ui: &mut egui::Ui,
+    state: &mut ViewportState,
+    app: &AppState,
+) -> Option<PieceId> {
     let available = ui.available_size();
     let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
 
-    let mut world = Rect::from_min_max(
-        Pos2::new(0.0, 0.0),
-        Pos2::new(app.sheet_config.width as f32, app.sheet_config.height as f32),
-    );
+    let sheet_w = (app.sheet_config.width as f32).max(1.0);
+    let sheet_h = (app.sheet_config.height as f32).max(1.0);
+    let sheet_count = app
+        .current_result
+        .as_ref()
+        .map(|r| r.sheets.len().max(1))
+        .unwrap_or(1);
+    let gap = 100.0_f32;
+    let total_width = sheet_count as f32 * sheet_w + (sheet_count.saturating_sub(1) as f32 * gap);
 
-    if world.width() < 1.0 || world.height() < 1.0 {
-        world = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
-    }
+    // Compute uniform scale: fit full multi-sheet span into screen rect preserving aspect ratio
+    let scale_x = rect.width() / total_width.max(1.0);
+    let scale_y = rect.height() / sheet_h;
+    let base_scale = scale_x.min(scale_y);
+    let ppu = base_scale * state.zoom.max(0.05);
 
-    let center = world.center();
-    let scaled_size = world.size() / state.zoom.max(0.05);
-    world = Rect::from_center_size(center + state.pan, scaled_size);
+    // World-space visible extent, centered on full layout center + pan
+    let vis_w = rect.width() / ppu;
+    let vis_h = rect.height() / ppu;
+    let center = Pos2::new(total_width * 0.5, sheet_h * 0.5) + state.pan;
+    let world = Rect::from_center_size(center, Vec2::new(vis_w, vis_h));
 
     let to_screen = RectTransform::from_to(world, rect);
 
@@ -47,7 +61,8 @@ pub fn show_viewport(ui: &mut egui::Ui, state: &mut ViewportState, app: &AppStat
         }
     }
 
-    let dragging = ui.input(|i| i.pointer.middle_down() || (i.modifiers.ctrl && i.pointer.primary_down()));
+    let dragging =
+        ui.input(|i| i.pointer.middle_down() || (i.modifiers.ctrl && i.pointer.primary_down()));
     if dragging && response.dragged() {
         let delta = response.drag_delta();
         let x_scale = world.width() / rect.width().max(1.0);
@@ -56,37 +71,49 @@ pub fn show_viewport(ui: &mut egui::Ui, state: &mut ViewportState, app: &AppStat
         state.pan.y -= delta.y * y_scale;
     }
 
-    painter.rect_stroke(
-        to_screen.transform_rect(Rect::from_min_max(
-            Pos2::new(0.0, 0.0),
-            Pos2::new(app.sheet_config.width as f32, app.sheet_config.height as f32),
-        )),
-        0.0,
-        Stroke::new(2.0, Color32::WHITE),
-        egui::StrokeKind::Outside,
-    );
-
-    let used_width = app
-        .current_result
-        .as_ref()
-        .and_then(|r| r.sheets.first())
-        .map(|s| s.strip_length)
-        .unwrap_or(app.stats.strip_length)
-        .clamp(0.0, app.sheet_config.width);
-    if used_width > 0.0 {
-        let x = used_width as f32;
-        let a = to_screen.transform_pos(Pos2::new(x, 0.0));
-        let b = to_screen.transform_pos(Pos2::new(x, app.sheet_config.height as f32));
-        painter.line_segment([a, b], Stroke::new(2.0, Color32::from_rgb(255, 180, 0)));
-    }
-
     let mut click_hit = None;
 
-    if let Some(result) = &app.current_result {
-        if let Some(sheet) = result.sheets.first() {
+    for sheet_idx in 0..sheet_count {
+        let x_offset = sheet_idx as f32 * (sheet_w + gap);
+        painter.rect_stroke(
+            to_screen.transform_rect(Rect::from_min_max(
+                Pos2::new(x_offset, 0.0),
+                Pos2::new(x_offset + sheet_w, sheet_h),
+            )),
+            0.0,
+            Stroke::new(2.0, Color32::WHITE),
+            egui::StrokeKind::Outside,
+        );
+
+        if let Some(result) = &app.current_result
+            && let Some(sheet) = result.sheets.get(sheet_idx)
+        {
+            let label = format!(
+                "Sheet {} ({:.0}%)",
+                sheet_idx + 1,
+                sheet.utilization * 100.0
+            );
+            let label_pos = to_screen.transform_pos(Pos2::new(x_offset, -24.0));
+            painter.text(
+                label_pos,
+                egui::Align2::LEFT_BOTTOM,
+                label,
+                egui::FontId::proportional(14.0),
+                Color32::WHITE,
+            );
+
+            let used_x = x_offset + sheet.strip_length.clamp(0.0, app.sheet_config.width) as f32;
+            let a = to_screen.transform_pos(Pos2::new(used_x, 0.0));
+            let b = to_screen.transform_pos(Pos2::new(used_x, sheet_h));
+            painter.line_segment([a, b], Stroke::new(2.0, Color32::from_rgb(255, 180, 0)));
+
             for placement in &sheet.placements {
                 if let Some(piece) = app.pieces.iter().find(|p| p.id == placement.piece_id) {
-                    let poly = placed_polygon(&piece.polygon, placement);
+                    let adjusted = Placement {
+                        x: placement.x + x_offset as f64,
+                        ..placement.clone()
+                    };
+                    let poly = placed_polygon(&piece.polygon, &adjusted);
                     let points = poly
                         .outer
                         .iter()
@@ -94,17 +121,23 @@ pub fn show_viewport(ui: &mut egui::Ui, state: &mut ViewportState, app: &AppStat
                         .collect::<Vec<_>>();
 
                     let mut fill = app.piece_color(&piece.source_file);
-                    if app.selected_piece == Some(piece.id) {
+                    let selected = app.selected_piece == Some(piece.id);
+                    if selected {
                         fill = fill.gamma_multiply(0.65);
                     }
 
-                    painter.add(Shape::convex_polygon(
-                        points.clone(),
-                        fill,
-                        Stroke::new(
-                            if app.selected_piece == Some(piece.id) { 3.0 } else { 1.0 },
-                            Color32::BLACK,
-                        ),
+                    if let Some(mesh) = triangulate_polygon(&points, fill) {
+                        painter.add(Shape::mesh(mesh));
+                    }
+
+                    let stroke_width = if selected { 3.0 } else { 1.0 };
+                    let mut outline = points.clone();
+                    if !outline.is_empty() {
+                        outline.push(outline[0]);
+                    }
+                    painter.add(Shape::line(
+                        outline,
+                        Stroke::new(stroke_width, Color32::BLACK),
                     ));
 
                     if response.clicked()
@@ -124,6 +157,32 @@ pub fn show_viewport(ui: &mut egui::Ui, state: &mut ViewportState, app: &AppStat
 fn placed_polygon(poly: &Polygon, placement: &Placement) -> Polygon {
     let rotated = polygon_ops::rotate(poly, placement.rotation, Point2D { x: 0.0, y: 0.0 });
     polygon_ops::translate(&rotated, placement.x, placement.y)
+}
+
+fn triangulate_polygon(screen_pts: &[Pos2], color: Color32) -> Option<Mesh> {
+    if screen_pts.len() < 3 {
+        return None;
+    }
+    let coords: Vec<f64> = screen_pts
+        .iter()
+        .flat_map(|p| [p.x as f64, p.y as f64])
+        .collect();
+    let indices = earcutr::earcut(&coords, &[], 2).ok()?;
+    if indices.is_empty() {
+        return None;
+    }
+    let mut mesh = Mesh::default();
+    for pt in screen_pts {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: *pt,
+            uv: egui::Pos2::ZERO,
+            color,
+        });
+    }
+    for idx in indices {
+        mesh.indices.push(idx as u32);
+    }
+    Some(mesh)
 }
 
 fn point_in_polygon_screen(p: Pos2, vertices: &[Pos2]) -> bool {

@@ -57,7 +57,11 @@ fn import_single_box_step_file() {
     let result = import_step(&path, None, &cfg).unwrap();
 
     assert_eq!(result.pieces.len(), 1, "should extract 1 piece from 1 box");
-    assert_eq!(result.thicknesses.len(), 1, "should detect 1 thickness group");
+    assert_eq!(
+        result.thicknesses.len(),
+        1,
+        "should detect 1 thickness group"
+    );
     assert!(
         (result.thicknesses[0].value_mm - 2.0).abs() < 0.5,
         "thickness should be ~2mm, got {}",
@@ -66,7 +70,10 @@ fn import_single_box_step_file() {
 
     let poly = &result.pieces[0].polygon;
     let area = polygon_ops::area(poly);
-    assert!(poly.outer.len() >= 4, "rectangular profile needs >= 4 vertices");
+    assert!(
+        poly.outer.len() >= 4,
+        "rectangular profile needs >= 4 vertices"
+    );
     // The profile should be approximately 20x10 = 200 mm²
     // (tolerance accounts for discretization and face selection variation)
     assert!(

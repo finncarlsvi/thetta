@@ -75,7 +75,7 @@ impl Default for SheetConfig {
         Self {
             width: 2440.0,
             height: 1220.0,
-            separation: 2.0,
+            separation: 12.0,
         }
     }
 }

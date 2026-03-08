@@ -1,5 +1,5 @@
-use crate::collision_detection::hazards::collector::HazardCollector;
 use crate::collision_detection::hazards::HazKey;
+use crate::collision_detection::hazards::collector::HazardCollector;
 
 pub trait HazardFilter {
     fn is_irrelevant(&self, haz_key: HazKey) -> bool;

@@ -64,8 +64,7 @@ mod inner {
 
     pub fn enumerate_solids(root: &ffi::TopoDS_Shape) -> Vec<SolidInfo> {
         let mut solids = Vec::new();
-        let mut explorer =
-            ffi::TopExp_Explorer_ctor(root, ffi::TopAbs_ShapeEnum::TopAbs_SOLID);
+        let mut explorer = ffi::TopExp_Explorer_ctor(root, ffi::TopAbs_ShapeEnum::TopAbs_SOLID);
 
         while explorer.More() {
             let shape = ffi::ExplorerCurrentShape(&explorer);
@@ -124,12 +123,9 @@ mod inner {
     }
 
     /// Collect planar faces as (normal, center_point) tuples.
-    fn collect_planar_faces(
-        solid: &ffi::TopoDS_Shape,
-    ) -> Vec<((f64, f64, f64), (f64, f64, f64))> {
+    fn collect_planar_faces(solid: &ffi::TopoDS_Shape) -> Vec<((f64, f64, f64), (f64, f64, f64))> {
         let mut result = Vec::new();
-        let mut explorer =
-            ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
+        let mut explorer = ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
 
         while explorer.More() {
             let shape = explorer.Current();
@@ -155,8 +151,7 @@ mod inner {
 
     fn largest_face_area(solid: &ffi::TopoDS_Shape) -> f64 {
         let mut max_area = 0.0_f64;
-        let mut explorer =
-            ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
+        let mut explorer = ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
 
         while explorer.More() {
             let shape = ffi::ExplorerCurrentShape(&explorer);
@@ -262,8 +257,7 @@ mod inner {
     ) -> Option<cxx::UniquePtr<ffi::TopoDS_Shape>> {
         let mut best_shape: Option<cxx::UniquePtr<ffi::TopoDS_Shape>> = None;
         let mut best_area = 0.0_f64;
-        let mut explorer =
-            ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
+        let mut explorer = ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
 
         while explorer.More() {
             let shape = explorer.Current();
