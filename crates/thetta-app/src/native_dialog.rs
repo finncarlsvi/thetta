@@ -1,42 +1,22 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub fn pick_step_file() -> Option<PathBuf> {
-    run_osascript(&[
-        "set p to POSIX path of (choose file with prompt \"Load STEP\" of type {\"step\",\"stp\"})",
-        "return p",
-    ])
-    .map(PathBuf::from)
+    rfd::FileDialog::new()
+        .set_title("Load STEP")
+        .add_filter("STEP files", &["step", "stp"])
+        .pick_file()
 }
 
 pub fn pick_export_target(default_name: &str) -> Option<(PathBuf, String)> {
-    let script = format!(
-        "set p to POSIX path of (choose file name with prompt \"Export STEP\" default name \"{}\")\nreturn p",
-        default_name.replace('"', "")
-    );
-    let path = run_osascript(&[&script])?;
-    let full_path = PathBuf::from(path);
-    let parent = full_path.parent()?.to_path_buf();
-    let stem = file_stem_or_default(&full_path, "nested");
-    Some((parent, stem))
-}
+    let path = rfd::FileDialog::new()
+        .set_title("Export STEP")
+        .set_file_name(default_name)
+        .add_filter("STEP files", &["step"])
+        .save_file()?;
 
-fn run_osascript(lines: &[&str]) -> Option<String> {
-    let mut cmd = Command::new("osascript");
-    for line in lines {
-        cmd.arg("-e").arg(line);
-    }
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8(output.stdout).ok()?;
-    let trimmed = text.trim().trim_matches('"').to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
+    let parent = path.parent()?.to_path_buf();
+    let stem = file_stem_or_default(&path, "nested");
+    Some((parent, stem))
 }
 
 fn file_stem_or_default(path: &Path, fallback: &str) -> String {

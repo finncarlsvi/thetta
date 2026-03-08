@@ -11,3 +11,4 @@ jagua-rs = { path = "../jagua-rs", features = ["spp"] }
 eframe = "0.31"
 egui = "0.31"
 serde_json = "1"
+rfd = "0.15"
