@@ -33,6 +33,7 @@ pub fn export_sheet(
     model: &StepModel,
     piece_refs: &[StepPieceRef],
     sheet: &Sheet,
+    sheet_config: &thetta_geometry::types::SheetConfig,
     output_path: &Path,
 ) -> Result<(), StepExportError> {
     let parent = output_path.parent().ok_or_else(|| {
@@ -56,7 +57,7 @@ pub fn export_sheet(
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("step") || ext.eq_ignore_ascii_case("stp"));
         if is_step {
-            return export_sheet_occt(model, piece_refs, sheet, output_path);
+            return export_sheet_occt(model, piece_refs, sheet, sheet_config, output_path);
         }
     }
 
@@ -99,6 +100,7 @@ fn export_sheet_occt(
     model: &StepModel,
     piece_refs: &[StepPieceRef],
     sheet: &Sheet,
+    sheet_config: &thetta_geometry::types::SheetConfig,
     output_path: &Path,
 ) -> Result<(), StepExportError> {
     use crate::occt;
@@ -111,6 +113,11 @@ fn export_sheet_occt(
     let key_by_piece = build_piece_map(piece_refs);
     let mut writer = occt::OcctStepWriter::new();
 
+    // Add CNC bed panel (extruded 10mm downward from z=0)
+    let bed_width = sheet.strip_length.max(sheet_config.width);
+    let bed = occt::make_box(bed_width, sheet_config.height, 10.0);
+    writer.add_shape(&bed)?;
+
     for placement in &sheet.placements {
         let Some(solid_key) = key_by_piece.get(&placement.piece_id) else {
             continue;
@@ -120,11 +127,20 @@ fn export_sheet_occt(
             return Err(StepExportError::MissingSolidForPiece(placement.piece_id.0));
         }
 
+        let frame = model.solid_frame(*solid_key).ok_or_else(|| {
+            StepExportError::OcctError(format!(
+                "missing profile frame for piece {}",
+                placement.piece_id.0
+            ))
+        })?;
+
         let transformed = occt::transform_shape(
             &solid_infos[solid_idx].solid,
             placement.x,
             placement.y,
             placement.rotation,
+            &frame.frame_3d,
+            frame.center_2d,
         );
         writer.add_shape(&transformed)?;
     }
@@ -137,6 +153,7 @@ pub fn export_all_sheets(
     model: &StepModel,
     piece_refs: &[StepPieceRef],
     result: &NestingResult,
+    sheet_config: &thetta_geometry::types::SheetConfig,
     out_dir: &Path,
     file_stem: &str,
 ) -> Result<Vec<PathBuf>, StepExportError> {
@@ -161,7 +178,7 @@ pub fn export_all_sheets(
     let mut written = Vec::with_capacity(result.sheets.len());
     for (idx, sheet) in result.sheets.iter().enumerate() {
         let path = out_dir.join(format!("{file_stem}_sheet_{:03}.{ext}", idx + 1));
-        export_sheet(model, piece_refs, sheet, &path)?;
+        export_sheet(model, piece_refs, sheet, sheet_config, &path)?;
         written.push(path);
     }
     Ok(written)

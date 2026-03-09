@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use thetta_geometry::polygon_ops;
-use thetta_geometry::types::{NestingResult, Placement, Sheet};
+use thetta_geometry::types::{NestingResult, Placement, Sheet, SheetConfig};
 use thetta_step::{ExtractionConfig, export_all_sheets, import_step};
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -64,10 +64,16 @@ fn roundtrip_import_export_reimport_preserves_count_and_area() {
         unplaced: Vec::new(),
     };
 
+    let sheet_config = SheetConfig {
+        width: 200.0,
+        height: 200.0,
+        separation: 0.0,
+    };
     let out = export_all_sheets(
         &imported.model,
         &imported.piece_refs,
         &result,
+        &sheet_config,
         &dir,
         "nested",
     )

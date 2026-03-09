@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use thetta_geometry::polygon_ops;
-use thetta_geometry::types::{NestingResult, Placement, Sheet};
+use thetta_geometry::types::{NestingResult, Placement, Sheet, SheetConfig};
 use thetta_step::{ExtractionConfig, export_all_sheets, import_step};
 
 static OCCT_LOCK: Mutex<()> = Mutex::new(());
@@ -165,10 +165,16 @@ fn occt_roundtrip_export_reimport() {
         unplaced: Vec::new(),
     };
 
+    let sheet_config = SheetConfig {
+        width: 300.0,
+        height: 200.0,
+        separation: 0.0,
+    };
     let out = export_all_sheets(
         &imported.model,
         &imported.piece_refs,
         &result,
+        &sheet_config,
         &dir,
         "nested",
     )

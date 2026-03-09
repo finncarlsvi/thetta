@@ -23,7 +23,6 @@ use thetta_step::{
 #[derive(Debug, Clone)]
 pub struct LoadedFile {
     pub path: PathBuf,
-    pub piece_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +135,7 @@ impl Default for AppState {
 }
 
 impl AppState {
+    #[allow(dead_code)]
     pub fn load_json_file(&mut self, path: &Path) -> Result<usize, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
@@ -160,7 +160,6 @@ impl AppState {
             .extend((0..added).map(|_| RotationRange::Continuous));
         self.loaded_files.push(LoadedFile {
             path: path.to_path_buf(),
-            piece_count: added,
         });
 
         self.benchmark = None;
@@ -171,6 +170,7 @@ impl AppState {
         Ok(added)
     }
 
+    #[allow(dead_code)]
     pub fn load_benchmark_file(&mut self, path: &Path) -> Result<usize, String> {
         let (pieces, sheet, meta) = load_benchmark(path).map_err(|e| e.to_string())?;
         let count = pieces.len();
@@ -180,7 +180,6 @@ impl AppState {
         self.sheet_config = sheet;
         self.loaded_files = vec![LoadedFile {
             path: path.to_path_buf(),
-            piece_count: count,
         }];
         self.benchmark = Some(LoadedBenchmark {
             name: meta.name,
@@ -419,6 +418,7 @@ impl AppState {
             return;
         };
         let refs = self.step_piece_refs.clone();
+        let sheet_config = self.sheet_config.clone();
         let (tx, rx) = mpsc::channel();
 
         self.step_exporting = true;
@@ -436,7 +436,8 @@ impl AppState {
                 }
             };
 
-            let exported = export_all_sheets(&model, &refs, &result, &out_dir, &file_stem);
+            let exported =
+                export_all_sheets(&model, &refs, &result, &sheet_config, &out_dir, &file_stem);
             let _ = tx.send(exported);
         });
     }
@@ -627,13 +628,11 @@ impl AppState {
         if let Some(path) = self.step_source_path.clone() {
             self.assign_file_color(&path);
             self.loaded_files.retain(|lf| lf.path != path);
-            self.loaded_files.push(LoadedFile {
-                path,
-                piece_count: step_count,
-            });
+            self.loaded_files.push(LoadedFile { path });
         }
     }
 
+    #[allow(dead_code)]
     fn clear_step_session(&mut self) {
         self.step_session = None;
         self.step_piece_refs.clear();

@@ -169,17 +169,111 @@ fn segments_intersect(p1: Point, p2: Point, q1: Point, q2: Point) -> bool {
         || (o4.abs() < eps && on_seg(q1, q2, p2))
 }
 
+/// Ray-casting point-in-polygon test.
 fn point_in_polygon(p: Point, vertices: &[Point]) -> bool {
     let mut inside = false;
     for i in 0..vertices.len() {
         let j = (i + 1) % vertices.len();
         let a = vertices[i];
         let b = vertices[j];
-        let intersects = (a.1 > p.1) != (b.1 > p.1)
-            && p.0 < (b.0 - a.0) * (p.1 - a.1) / ((b.1 - a.1).abs().max(1e-6)) + a.0;
+        let dy = b.1 - a.1;
+        let intersects =
+            (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / dy + a.0;
         if intersects {
             inside = !inside;
         }
     }
     inside
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pip_triangle_interior() {
+        // Triangle (0,0), (10,0), (5,10) — point (3,5) is inside
+        let verts = vec![Point(0.0, 0.0), Point(10.0, 0.0), Point(5.0, 10.0)];
+        assert!(point_in_polygon(Point(3.0, 5.0), &verts));
+        assert!(point_in_polygon(Point(5.0, 3.0), &verts));
+    }
+
+    #[test]
+    fn pip_triangle_exterior() {
+        let verts = vec![Point(0.0, 0.0), Point(10.0, 0.0), Point(5.0, 10.0)];
+        assert!(!point_in_polygon(Point(-1.0, 5.0), &verts));
+        assert!(!point_in_polygon(Point(15.0, 5.0), &verts));
+    }
+
+    #[test]
+    fn pip_square() {
+        let verts = vec![
+            Point(0.0, 0.0),
+            Point(10.0, 0.0),
+            Point(10.0, 10.0),
+            Point(0.0, 10.0),
+        ];
+        assert!(point_in_polygon(Point(5.0, 5.0), &verts));
+        assert!(!point_in_polygon(Point(15.0, 5.0), &verts));
+    }
+
+    #[test]
+    fn overlap_containment_detected() {
+        // Small square entirely inside large square — no edge crossings,
+        // overlap must be detected via point-in-polygon.
+        let big = SPolygon::new(vec![
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 100.0),
+            Point(0.0, 100.0),
+        ])
+        .unwrap();
+        let small = SPolygon::new(vec![
+            Point(30.0, 30.0),
+            Point(60.0, 30.0),
+            Point(60.0, 60.0),
+            Point(30.0, 60.0),
+        ])
+        .unwrap();
+        assert!(polygons_overlap(&big, &small));
+        assert!(polygons_overlap(&small, &big));
+    }
+
+    #[test]
+    fn overlap_separated_not_detected() {
+        let a = SPolygon::new(vec![
+            Point(0.0, 0.0),
+            Point(10.0, 0.0),
+            Point(10.0, 10.0),
+            Point(0.0, 10.0),
+        ])
+        .unwrap();
+        let b = SPolygon::new(vec![
+            Point(20.0, 0.0),
+            Point(30.0, 0.0),
+            Point(30.0, 10.0),
+            Point(20.0, 10.0),
+        ])
+        .unwrap();
+        assert!(!polygons_overlap(&a, &b));
+    }
+
+    #[test]
+    fn overlap_triangle_containment() {
+        // Small triangle inside large triangle — tests downward edges
+        let big = SPolygon::new(vec![
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(50.0, 100.0),
+        ])
+        .unwrap();
+        let small = SPolygon::new(vec![
+            Point(40.0, 10.0),
+            Point(60.0, 10.0),
+            Point(50.0, 30.0),
+        ])
+        .unwrap();
+        assert!(polygons_overlap(&big, &small));
+        assert!(polygons_overlap(&small, &big));
+    }
 }

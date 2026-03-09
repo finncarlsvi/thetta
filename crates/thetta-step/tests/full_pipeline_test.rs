@@ -4,7 +4,7 @@
 
 use std::sync::Mutex;
 
-use thetta_geometry::types::{NestingResult, Placement, Sheet};
+use thetta_geometry::types::{NestingResult, Placement, Sheet, SheetConfig};
 use thetta_step::{ExtractionConfig, export_all_sheets, import_step};
 
 static OCCT_LOCK: Mutex<()> = Mutex::new(());
@@ -62,10 +62,16 @@ fn full_pipeline_single_box() {
     // 3. Export
     let out_dir = std::env::temp_dir().join("thetta_pipeline_test");
     std::fs::create_dir_all(&out_dir).unwrap();
+    let sheet_config = SheetConfig {
+        width: 200.0,
+        height: 200.0,
+        separation: 0.0,
+    };
     let exported = export_all_sheets(
         &imported.model,
         &imported.piece_refs,
         &result,
+        &sheet_config,
         &out_dir,
         "pipeline",
     )

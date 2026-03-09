@@ -61,6 +61,20 @@ struct SolidRecord {
     key: StepSolidKey,
     thickness_mm: f64,
     profile: Polygon,
+    /// 3D coordinate frame from profile extraction + 2D centering offset.
+    /// `None` for JSON-imported solids (which don't have 3D geometry).
+    frame: Option<SolidFrame>,
+}
+
+/// Stores the profile extraction frame and 2D centering offset so that
+/// the STEP exporter can reconstruct the correct 3D transformation.
+#[derive(Debug, Clone)]
+pub struct SolidFrame {
+    /// The 3D coordinate frame the profile was extracted from.
+    #[cfg(feature = "occt")]
+    pub frame_3d: crate::occt::ProfileFrame3D,
+    /// Bounding-box center of the 2D profile before centering.
+    pub center_2d: (f64, f64),
 }
 
 impl StepModel {
@@ -74,6 +88,12 @@ impl StepModel {
 
     pub fn solid_profile(&self, key: StepSolidKey) -> Option<&Polygon> {
         self.solids.get(key.0 as usize).map(|s| &s.profile)
+    }
+
+    pub fn solid_frame(&self, key: StepSolidKey) -> Option<&SolidFrame> {
+        self.solids
+            .get(key.0 as usize)
+            .and_then(|s| s.frame.as_ref())
     }
 }
 
@@ -177,14 +197,25 @@ fn import_step_occt(
         let profile_opt =
             occt::extract_profile(&info.solid, angular_deflection, curvature_deflection);
 
-        let profile = match profile_opt {
+        let (profile, frame) = match profile_opt {
             Some(fp) => {
+                let frame_3d = fp.frame.clone();
                 let polygon = Polygon {
                     outer: fp.outer,
                     holes: fp.holes,
                 };
+
+                // Compute 2D bbox center before normalize_polygon centers it
+                let center_2d = bbox_center_2d(&polygon.outer);
+
                 match normalize_polygon(polygon) {
-                    Ok(p) if p.outer.len() >= 3 => p,
+                    Ok(p) if p.outer.len() >= 3 => (
+                        p,
+                        Some(SolidFrame {
+                            frame_3d,
+                            center_2d,
+                        }),
+                    ),
                     _ => {
                         skipped += 1;
                         continue;
@@ -201,6 +232,7 @@ fn import_step_occt(
             key: StepSolidKey(idx as u32),
             thickness_mm: info.thickness_mm,
             profile,
+            frame,
         });
     }
 
@@ -316,6 +348,21 @@ fn select_thickness(requested: Option<f64>, groups: &[ThicknessInfo]) -> Option<
     Some(groups[0].value_mm)
 }
 
+fn bbox_center_2d(points: &[Point2D]) -> (f64, f64) {
+    if points.is_empty() {
+        return (0.0, 0.0);
+    }
+    let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in points {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+    ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
+}
+
 fn thickness_bucket(value_mm: f64, bucket_mm: f64) -> i64 {
     let bucket = if bucket_mm > 0.0 { bucket_mm } else { 0.1 };
     (value_mm / bucket).round() as i64
@@ -366,6 +413,7 @@ fn parse_step_model(path: &Path, text: &str) -> Result<StepModel, StepImportErro
             key: StepSolidKey(idx as u32),
             thickness_mm: solid.thickness_mm.max(0.0),
             profile: normalized,
+            frame: None,
         });
     }
 

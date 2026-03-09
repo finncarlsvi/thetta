@@ -171,6 +171,22 @@ mod inner {
     pub struct FaceProfile {
         pub outer: Vec<Point2D>,
         pub holes: Vec<Vec<Point2D>>,
+        /// The 3D coordinate frame used to extract this profile.
+        pub frame: ProfileFrame3D,
+    }
+
+    /// The 3D coordinate frame from which a profile was extracted.
+    /// Needed to correctly map nesting placements back to 3D transforms.
+    #[derive(Debug, Clone)]
+    pub struct ProfileFrame3D {
+        /// Plane origin in 3D (before 2D centering)
+        pub origin: (f64, f64, f64),
+        /// Local X axis on the profile plane
+        pub u_axis: (f64, f64, f64),
+        /// Local Y axis on the profile plane
+        pub v_axis: (f64, f64, f64),
+        /// Face normal
+        pub normal: (f64, f64, f64),
     }
 
     /// Extract a 2D profile from a solid by finding its largest planar face
@@ -249,7 +265,18 @@ mod inner {
             return None;
         }
 
-        Some(FaceProfile { outer, holes })
+        let frame = ProfileFrame3D {
+            origin,
+            u_axis: ux,
+            v_axis: uy,
+            normal: nz,
+        };
+
+        Some(FaceProfile {
+            outer,
+            holes,
+            frame,
+        })
     }
 
     fn find_largest_planar_face(
@@ -464,37 +491,159 @@ mod inner {
 
     // ── Transform ────────────────────────────────────────────────────
 
-    /// Apply a 2D translation + rotation (on the XY plane) to a 3D shape.
+    /// Apply a nesting placement to a 3D shape, accounting for the profile
+    /// extraction frame.
+    ///
+    /// The full transformation is:
+    ///   1. Translate so profile 3D center goes to world origin
+    ///   2. Rotate to align profile's local axes (u,v,n) with world (X,Y,Z)
+    ///   3. Apply nesting rotation around Z
+    ///   4. Apply nesting translation (x, y, 0)
     pub fn transform_shape(
         shape: &ffi::TopoDS_Shape,
         dx: f64,
         dy: f64,
         rotation_rad: f64,
+        frame: &ProfileFrame3D,
+        center_2d: (f64, f64),
     ) -> cxx::UniquePtr<ffi::TopoDS_Shape> {
+        let u = frame.u_axis;
+        let v = frame.v_axis;
+        let n = frame.normal;
+        let o = frame.origin;
+
+        // 3D center = origin + cx*u + cy*v
+        let (cx, cy) = center_2d;
+        let center = (
+            o.0 + cx * u.0 + cy * v.0,
+            o.1 + cx * u.1 + cy * v.1,
+            o.2 + cx * u.2 + cy * v.2,
+        );
+
         let mut current = ffi::TopoDS_Shape_to_owned(shape);
 
-        // Rotation around Z axis
+        // Step 1: Translate so profile center → origin
+        {
+            let mut trsf = ffi::new_transform();
+            let p1 = ffi::new_point(center.0, center.1, center.2);
+            let p2 = ffi::new_point(0.0, 0.0, 0.0);
+            trsf.pin_mut().SetTranslation(&p1, &p2);
+            let mut b = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
+            current = ffi::TopoDS_Shape_to_owned(b.pin_mut().Shape());
+        }
+
+        // Step 2: Rotate to align local frame (u,v,n) with world (X,Y,Z).
+        // The alignment rotation maps u→X, v→Y, n→Z.
+        // We compute the angle between u-projected-onto-XY and X, then rotate
+        // around the face normal first (to align u with XY-projected direction),
+        // but this gets complicated for arbitrary normals.
+        //
+        // Instead, use two sequential rotations:
+        //   a) Rotate around an axis to bring normal → Z
+        //   b) Rotate around Z to bring u → X
+        {
+            // (a) Rotate normal → Z
+            let dot_nz = n.2; // n · (0,0,1)
+            if dot_nz < 1.0 - 1e-9 {
+                // Rotation axis = n × Z (normalized)
+                let (ax, ay, az) = if dot_nz > -1.0 + 1e-9 {
+                    cross(n, (0.0, 0.0, 1.0))
+                } else {
+                    // n ≈ -Z: pick any perpendicular axis
+                    (1.0, 0.0, 0.0)
+                };
+                let alen = (ax * ax + ay * ay + az * az).sqrt();
+                if alen > 1e-12 {
+                    let angle = dot_nz.clamp(-1.0, 1.0).acos();
+                    let dir = ffi::gp_Dir_ctor(ax / alen, ay / alen, az / alen);
+                    let origin = ffi::new_point(0.0, 0.0, 0.0);
+                    let axis = ffi::gp_Ax1_ctor(&origin, &dir);
+                    let mut trsf = ffi::new_transform();
+                    trsf.pin_mut().SetRotation(&axis, angle);
+                    let mut b = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
+                    current = ffi::TopoDS_Shape_to_owned(b.pin_mut().Shape());
+                }
+            }
+
+            // (b) After (a), the u-axis has been rotated. Compute where it lands.
+            // u_rotated = R_align_normal * u. Since we rotated n→Z, u_rotated lies in XY plane.
+            // We need to find the angle from X to u_rotated and rotate by -angle around Z.
+            let u_rot = if dot_nz < 1.0 - 1e-9 && dot_nz > -1.0 + 1e-9 {
+                // Apply the same rotation to u
+                let (ax, ay, az) = cross(n, (0.0, 0.0, 1.0));
+                let alen = (ax * ax + ay * ay + az * az).sqrt();
+                let angle = dot_nz.clamp(-1.0, 1.0).acos();
+                rodrigues_rotate(u, (ax / alen, ay / alen, az / alen), angle)
+            } else if dot_nz >= 1.0 - 1e-9 {
+                u // normal already ≈ Z, u is already in XY
+            } else {
+                // normal ≈ -Z, rotated 180° around X → u stays, v flips
+                (u.0, -u.1, u.2)
+            };
+
+            let angle_u = u_rot.1.atan2(u_rot.0);
+            if angle_u.abs() > 1e-9 {
+                let mut trsf = ffi::new_transform();
+                let origin = ffi::new_point(0.0, 0.0, 0.0);
+                let z_dir = ffi::gp_Dir_ctor(0.0, 0.0, 1.0);
+                let axis = ffi::gp_Ax1_ctor(&origin, &z_dir);
+                trsf.pin_mut().SetRotation(&axis, -angle_u);
+                let mut b = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
+                current = ffi::TopoDS_Shape_to_owned(b.pin_mut().Shape());
+            }
+        }
+
+        // Step 3: Apply nesting rotation around Z
         if rotation_rad.abs() > 1e-12 {
             let mut trsf = ffi::new_transform();
             let origin = ffi::new_point(0.0, 0.0, 0.0);
             let z_dir = ffi::gp_Dir_ctor(0.0, 0.0, 1.0);
             let axis = ffi::gp_Ax1_ctor(&origin, &z_dir);
             trsf.pin_mut().SetRotation(&axis, rotation_rad);
-            let mut builder = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
-            current = ffi::TopoDS_Shape_to_owned(builder.pin_mut().Shape());
+            let mut b = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
+            current = ffi::TopoDS_Shape_to_owned(b.pin_mut().Shape());
         }
 
-        // Translation
+        // Step 4: Translate to final position
         if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
             let mut trsf = ffi::new_transform();
             let p1 = ffi::new_point(0.0, 0.0, 0.0);
             let p2 = ffi::new_point(dx, dy, 0.0);
             trsf.pin_mut().SetTranslation(&p1, &p2);
-            let mut builder = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
-            current = ffi::TopoDS_Shape_to_owned(builder.pin_mut().Shape());
+            let mut b = ffi::BRepBuilderAPI_Transform_ctor(&current, &trsf, true);
+            current = ffi::TopoDS_Shape_to_owned(b.pin_mut().Shape());
         }
 
         current
+    }
+
+    /// Rodrigues' rotation formula: rotate vector v around unit axis k by angle θ.
+    fn rodrigues_rotate(
+        v: (f64, f64, f64),
+        k: (f64, f64, f64),
+        theta: f64,
+    ) -> (f64, f64, f64) {
+        let (sin_t, cos_t) = theta.sin_cos();
+        let dot = v.0 * k.0 + v.1 * k.1 + v.2 * k.2;
+        let cx = cross(k, v);
+        (
+            v.0 * cos_t + cx.0 * sin_t + k.0 * dot * (1.0 - cos_t),
+            v.1 * cos_t + cx.1 * sin_t + k.1 * dot * (1.0 - cos_t),
+            v.2 * cos_t + cx.2 * sin_t + k.2 * dot * (1.0 - cos_t),
+        )
+    }
+
+    /// Create a box (sheet bed) as a 3D solid.
+    pub fn make_box(
+        width: f64,
+        height: f64,
+        depth: f64,
+    ) -> cxx::UniquePtr<ffi::TopoDS_Shape> {
+        let origin = ffi::new_point(0.0, 0.0, -depth);
+        let progress = ffi::Message_ProgressRange_ctor();
+        let mut maker = ffi::BRepPrimAPI_MakeBox_ctor(&origin, width, height, depth);
+        maker.pin_mut().Build(&progress);
+        ffi::TopoDS_Shape_to_owned(maker.pin_mut().Shape())
     }
 }
 
