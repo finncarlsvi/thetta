@@ -639,7 +639,7 @@ mod inner {
         height: f64,
         depth: f64,
     ) -> cxx::UniquePtr<ffi::TopoDS_Shape> {
-        let origin = ffi::new_point(0.0, 0.0, -depth);
+        let origin = ffi::new_point(0.0, 0.0, 0.0);
         let progress = ffi::Message_ProgressRange_ctor();
         let mut maker = ffi::BRepPrimAPI_MakeBox_ctor(&origin, width, height, depth);
         maker.pin_mut().Build(&progress);
