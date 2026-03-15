@@ -1,0 +1,30 @@
+Total: 28 / 28
+
+- `RES-001-micro-joints-genetic-algorithm.md` — Effective location of micro joints and generation of tool path using heuristic and genetic approach for cutting sheet metal parts — Paper — High
+- `RES-002-common-edge-nested-cutting.md` — Optimizing Cutting Sequences and Paths for Common-Edge Nested Parts — Paper — High
+- `RES-003-cutting-path-two-step-ga.md` — Cutting path optimization in CNC cutting processes using a two-step genetic algorithm — Paper — Medium
+- `RES-004-tool-path-optimization-models.md` — Optimization Models of Tool Path Problem for CNC Sheet Metal Cutting Machines — Paper — Medium
+- `RES-005-mecsoft-bridges-tabs.md` — Bridges & Tabs Explored — MecSoft Corporation — Product — High
+- `RES-006-fusion360-tabs-reference.md` — Fusion 360 Tabs Reference — Autodesk — Product — High
+- `RES-007-fusion360-tabs-tutorial.md` — Fusion 360 Tabs Tutorial — CAD CAM Lessons — Community — Medium
+- `RES-008-fusion360-adjacent-tabs-forum.md` — How to position tabs for cutting out adjacent pieces — Autodesk Forum — Community — High
+- `RES-009-vcarve-tab-customization.md` — VCarve/Aspire Tab Customization — Learn Your CNC — Community — Medium
+- `RES-010-cambam-holding-tabs.md` — CamBam Holding Tabs Documentation — Product — High
+- `RES-011-freecad-dressuptag.md` — FreeCAD CAM DressupTag (Holding Tags) — Code — High
+- `RES-012-freecad-dressuptag-source.md` — FreeCAD PathDressupTag.py Source Code — Code — High
+- `RES-013-bcnc-repo.md` — bCNC — GRBL CNC Sender with Cutout Tabs — Code — Medium
+- `RES-014-bcnc-tabs-tutorial.md` — bCNC Tabs Tool Tutorial — Community — Medium
+- `RES-015-viaconstructor.md` — viaconstructor — Python CAM tool with tab support — Code — Medium
+- `RES-016-kirimoto.md` — Kiri:Moto — Browser-based CAM — Code — Medium
+- `RES-017-deepnest.md` — Deepnest — Open Source Nesting — Code — Medium
+- `RES-018-homag-nesting-features.md` — HOMAG Stay-Down, Common Line, Tabs, Onion Skinning — Product — High
+- `RES-019-woodweb-tabs-vs-onionskin.md` — Tabs vs. Onion Skinning — WOODWEB CNC Forum — Community — Medium
+- `RES-020-woodweb-tabbing-small-parts.md` — Tabbing Versus Onion-Skinning for Small Parts — WoodWeb — Community — Medium
+- `RES-021-cnczone-optimize-tabs.md` — How do I optimize the use of tabs? — CNCZone Forum — Community — Medium
+- `RES-022-pcb-tab-routing-masterclass.md` — Tab Routing Masterclass: Optimizing Breakaway Tabs for Clean PCB Separation — AllPCB — Community — Medium
+- `RES-023-altium-mouse-bites.md` — PCB Panelization: Mouse Bites and V-Scores — Altium — Community — Low
+- `RES-024-fabricator-common-line.md` — When to cut a common line — The Fabricator — Community — Medium
+- `RES-025-mate-tabbing-practices.md` — Workholding Best Practices for Tabbing — Mate Precision Technologies — Product — Medium
+- `RES-026-sendcutsend-tabs.md` — SendCutSend CNC Routing Tabs Documentation — Product — Medium
+- `RES-027-mastercam-tabs.md` — Creating and Using Tabs in Mastercam — CamInstructor — Community — Medium
+- `RES-028-maslow-tabs-strategy.md` — Maslow CNC Tabs Strategy Discussion — Community — Low
