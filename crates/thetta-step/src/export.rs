@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use thetta_geometry::types::{NestingResult, Sheet};
+use thetta_geometry::types::{NestingResult, Sheet, Tab};
 
 use crate::import::{StepModel, StepPieceRef, StepSolidKey};
 use crate::profile::transform_polygon;
@@ -35,6 +35,8 @@ pub fn export_sheet(
     sheet: &Sheet,
     sheet_config: &thetta_geometry::types::SheetConfig,
     output_path: &Path,
+    tabs: Option<&HashMap<(usize, usize), Vec<Tab>>>,
+    sheet_index: usize,
 ) -> Result<(), StepExportError> {
     let parent = output_path.parent().ok_or_else(|| {
         StepExportError::InvalidOutputPath(format!(
@@ -62,7 +64,7 @@ pub fn export_sheet(
     }
 
     // Fallback: JSON-based export
-    export_sheet_json(model, piece_refs, sheet, output_path)
+    export_sheet_json(model, piece_refs, sheet, output_path, tabs, sheet_index)
 }
 
 fn export_sheet_json(
@@ -70,6 +72,8 @@ fn export_sheet_json(
     piece_refs: &[StepPieceRef],
     sheet: &Sheet,
     output_path: &Path,
+    tabs: Option<&HashMap<(usize, usize), Vec<Tab>>>,
+    sheet_index: usize,
 ) -> Result<(), StepExportError> {
     let key_by_piece = build_piece_map(piece_refs);
     let mut solids = Vec::new();
@@ -89,7 +93,38 @@ fn export_sheet_json(
         solids.push(ExportSolid::from_polygon(&transformed, thickness));
     }
 
-    let json = serde_json::to_string_pretty(&ExportFile { solids })
+    let sheet_tabs = tabs.and_then(|tab_map| {
+        let placement_tabs = sheet
+            .placements
+            .iter()
+            .enumerate()
+            .filter_map(|(placement_idx, placement)| {
+                tab_map
+                    .get(&(sheet_index, placement_idx))
+                    .map(|tabs| ExportPlacementTabs {
+                        piece_id: placement.piece_id.0,
+                        placement_index: placement_idx,
+                        tabs: tabs
+                            .iter()
+                            .map(|t| ExportTab {
+                                x: t.position.x,
+                                y: t.position.y,
+                                edge_index: t.edge_index,
+                                t: t.t,
+                                width: t.width,
+                                height: t.height,
+                            })
+                            .collect(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        (!placement_tabs.is_empty()).then_some(placement_tabs)
+    });
+
+    let json = serde_json::to_string_pretty(&ExportFile {
+        solids,
+        tabs: sheet_tabs,
+    })
         .map_err(|e| StepExportError::WriteError(e.to_string()))?;
     std::fs::write(output_path, json).map_err(|e| StepExportError::WriteError(e.to_string()))?;
     Ok(())
@@ -156,6 +191,7 @@ pub fn export_all_sheets(
     sheet_config: &thetta_geometry::types::SheetConfig,
     out_dir: &Path,
     file_stem: &str,
+    tabs: Option<&HashMap<(usize, usize), Vec<Tab>>>,
 ) -> Result<Vec<PathBuf>, StepExportError> {
     if !out_dir.exists() || !out_dir.is_dir() {
         return Err(StepExportError::InvalidOutputPath(format!(
@@ -178,7 +214,7 @@ pub fn export_all_sheets(
     let mut written = Vec::with_capacity(result.sheets.len());
     for (idx, sheet) in result.sheets.iter().enumerate() {
         let path = out_dir.join(format!("{file_stem}_sheet_{:03}.{ext}", idx + 1));
-        export_sheet(model, piece_refs, sheet, sheet_config, &path)?;
+        export_sheet(model, piece_refs, sheet, sheet_config, &path, tabs, idx)?;
         written.push(path);
     }
     Ok(written)
@@ -196,6 +232,8 @@ fn build_piece_map(
 #[derive(Debug, Serialize)]
 struct ExportFile {
     solids: Vec<ExportSolid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tabs: Option<Vec<ExportPlacementTabs>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,6 +246,23 @@ struct ExportSolid {
 struct ExportPolygon {
     outer: Vec<[f64; 2]>,
     holes: Vec<Vec<[f64; 2]>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportPlacementTabs {
+    piece_id: u64,
+    placement_index: usize,
+    tabs: Vec<ExportTab>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportTab {
+    x: f64,
+    y: f64,
+    edge_index: usize,
+    t: f64,
+    width: f64,
+    height: f64,
 }
 
 impl ExportSolid {

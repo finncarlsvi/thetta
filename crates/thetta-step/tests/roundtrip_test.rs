@@ -76,6 +76,7 @@ fn roundtrip_import_export_reimport_preserves_count_and_area() {
         &sheet_config,
         &dir,
         "nested",
+        None,
     )
     .unwrap();
     assert_eq!(out.len(), 1);

@@ -1,9 +1,9 @@
-use crate::state::AppState;
+use crate::state::{AppState, TabState};
 use egui::emath::RectTransform;
 use egui::epaint::Mesh;
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use thetta_geometry::polygon_ops;
-use thetta_geometry::types::{PieceId, Placement, Point2D, Polygon};
+use thetta_geometry::types::{PieceId, Placement, Point2D, Polygon, Sheet};
 
 #[derive(Debug, Clone)]
 pub struct ViewportState {
@@ -148,6 +148,10 @@ pub fn show_viewport(
                     }
                 }
             }
+
+            if !app.tab_state.results.is_empty() {
+                draw_tabs(&painter, &app.tab_state, sheet_idx, sheet, x_offset, &to_screen);
+            }
         }
     }
 
@@ -198,4 +202,33 @@ fn point_in_polygon_screen(p: Pos2, vertices: &[Pos2]) -> bool {
         }
     }
     inside
+}
+
+fn draw_tabs(
+    painter: &egui::Painter,
+    tab_state: &TabState,
+    sheet_idx: usize,
+    sheet: &Sheet,
+    x_offset: f32,
+    to_screen: &RectTransform,
+) {
+    let tab_color = Color32::from_rgba_premultiplied(255, 165, 0, 200);
+    let world_px = to_screen.transform_pos(Pos2::new(1.0, 0.0)).x
+        - to_screen.transform_pos(Pos2::new(0.0, 0.0)).x;
+    let px_per_world = world_px.abs().max(0.0001);
+
+    for (placement_idx, _) in sheet.placements.iter().enumerate() {
+        let Some(tabs) = tab_state.results.get(&(sheet_idx, placement_idx)) else {
+            continue;
+        };
+        for tab in tabs {
+            let world_center = Pos2::new(tab.position.x as f32 + x_offset, tab.position.y as f32);
+            let center = to_screen.transform_pos(world_center);
+
+            let width_px = ((tab.width as f32) * px_per_world).max(3.0);
+            let height_px = (width_px * 0.5).max(2.0);
+            let rect = Rect::from_center_size(center, Vec2::new(width_px, height_px));
+            painter.rect_filled(rect, 1.0, tab_color);
+        }
+    }
 }

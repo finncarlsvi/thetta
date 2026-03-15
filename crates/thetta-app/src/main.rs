@@ -87,6 +87,9 @@ impl eframe::App for ThettaApp {
                 PanelAction::Renest => {
                     self.state.start_optimizer();
                 }
+                PanelAction::RegenerateTabs => {
+                    self.state.generate_tabs();
+                }
             }
         }
 

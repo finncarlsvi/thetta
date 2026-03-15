@@ -17,6 +17,36 @@ pub fn area(poly: &Polygon) -> f64 {
     ring_area(&poly.outer) - holes_area
 }
 
+/// Compute perimeter of the outer contour only.
+pub fn perimeter(poly: &Polygon) -> f64 {
+    let pts = &poly.outer;
+    if pts.len() < 2 {
+        return 0.0;
+    }
+
+    let mut sum = 0.0;
+    for i in 0..pts.len() {
+        let j = (i + 1) % pts.len();
+        sum += edge_length(pts[i], pts[j]);
+    }
+    sum
+}
+
+/// Euclidean distance between two points.
+pub fn edge_length(a: Point2D, b: Point2D) -> f64 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// Linear interpolation along an edge.
+pub fn point_on_edge(a: Point2D, b: Point2D, t: f64) -> Point2D {
+    Point2D {
+        x: a.x + t * (b.x - a.x),
+        y: a.y + t * (b.y - a.y),
+    }
+}
+
 pub fn bounding_box(poly: &Polygon) -> BoundingBox {
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
@@ -188,5 +218,37 @@ mod tests {
             assert!((a.y - b.y).abs() < 1e-12);
         }
         assert_eq!(p.holes.len(), out.holes.len());
+    }
+
+    #[test]
+    fn perimeter_rectangle() {
+        let p = test_shapes::rectangle(100.0, 50.0);
+        assert!((perimeter(&p) - 300.0).abs() < EPS);
+    }
+
+    #[test]
+    fn perimeter_triangle() {
+        let p = test_shapes::triangle(10.0, 5.0);
+        let expected = 10.0 + 2.0 * (5.0_f64.powi(2) + 5.0_f64.powi(2)).sqrt();
+        assert!((perimeter(&p) - expected).abs() < EPS);
+    }
+
+    #[test]
+    fn perimeter_circle_approx() {
+        let p = test_shapes::circle(50.0, 128);
+        let expected = std::f64::consts::TAU * 50.0;
+        assert!((perimeter(&p) - expected).abs() < 0.2);
+    }
+
+    #[test]
+    fn point_on_edge_endpoints_and_midpoint() {
+        let a = Point2D { x: 1.0, y: 2.0 };
+        let b = Point2D { x: 5.0, y: 10.0 };
+        let p0 = point_on_edge(a, b, 0.0);
+        let p1 = point_on_edge(a, b, 1.0);
+        let pm = point_on_edge(a, b, 0.5);
+        assert!((p0.x - a.x).abs() < EPS && (p0.y - a.y).abs() < EPS);
+        assert!((p1.x - b.x).abs() < EPS && (p1.y - b.y).abs() < EPS);
+        assert!((pm.x - 3.0).abs() < EPS && (pm.y - 6.0).abs() < EPS);
     }
 }

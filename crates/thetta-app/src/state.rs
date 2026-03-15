@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use egui::Color32;
 use jagua_rs::geometry::geo_enums::RotationRange;
 use thetta_geometry::polygon_ops;
-use thetta_geometry::types::{NestingResult, Piece, PieceId, SheetConfig};
+use thetta_geometry::tabs;
+use thetta_geometry::types::{NestingResult, Piece, PieceId, Point2D, SheetConfig, Tab, TabConfig};
 use thetta_nesting::benchmark::load_benchmark;
 use thetta_nesting::conversion::rotation_range_to_samples;
 use thetta_nesting::gls::OptimizerConfig;
@@ -66,6 +67,13 @@ impl Default for NestingStats {
     }
 }
 
+/// Holds tab configuration and computed tab results.
+#[derive(Default)]
+pub struct TabState {
+    pub config: TabConfig,
+    pub results: HashMap<(usize, usize), Vec<Tab>>,
+}
+
 pub struct AppState {
     pub loaded_files: Vec<LoadedFile>,
     pub pieces: Vec<Piece>,
@@ -81,6 +89,7 @@ pub struct AppState {
     pub update_rx: Option<Receiver<NestingUpdate>>,
     pub cancel_token: Option<Arc<AtomicBool>>,
     pub run_started_at: Option<Instant>,
+    pub tab_state: TabState,
     pub file_colors: HashMap<PathBuf, Color32>,
     pub step_session: Option<Arc<Mutex<StepModel>>>,
     pub step_piece_refs: Vec<StepPieceRef>,
@@ -115,6 +124,7 @@ impl Default for AppState {
             update_rx: None,
             cancel_token: None,
             run_started_at: None,
+            tab_state: TabState::default(),
             file_colors: HashMap::new(),
             step_session: None,
             step_piece_refs: Vec::new(),
@@ -166,6 +176,7 @@ impl AppState {
         self.nesting_mode = NestingMode::Sheet;
         self.assign_file_color(path);
         self.stats.pieces_total = self.pieces.len();
+        self.tab_state.results.clear();
         self.step_export_status = None;
         Ok(added)
     }
@@ -188,6 +199,7 @@ impl AppState {
         self.nesting_mode = NestingMode::Strip;
         self.current_result = None;
         self.selected_piece = None;
+        self.tab_state.results.clear();
 
         self.assign_file_color(path);
         self.stats.pieces_total = count;
@@ -200,6 +212,7 @@ impl AppState {
             return;
         }
         self.stop_optimizer();
+        self.tab_state.results.clear();
 
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -265,6 +278,7 @@ impl AppState {
                 }
                 Ok(NestingUpdate::Finished(result)) => {
                     self.apply_result(result);
+                    self.generate_tabs();
                     finished = true;
                     break;
                 }
@@ -287,10 +301,10 @@ impl AppState {
             }
         }
 
-        if self.optimizer_running {
-            if let Some(start) = self.run_started_at {
-                self.stats.elapsed = start.elapsed();
-            }
+        if self.optimizer_running
+            && let Some(start) = self.run_started_at
+        {
+            self.stats.elapsed = start.elapsed();
         }
 
         if finished {
@@ -419,6 +433,7 @@ impl AppState {
         };
         let refs = self.step_piece_refs.clone();
         let sheet_config = self.sheet_config.clone();
+        let tabs = (!self.tab_state.results.is_empty()).then_some(self.tab_state.results.clone());
         let (tx, rx) = mpsc::channel();
 
         self.step_exporting = true;
@@ -436,8 +451,15 @@ impl AppState {
                 }
             };
 
-            let exported =
-                export_all_sheets(&model, &refs, &result, &sheet_config, &out_dir, &file_stem);
+            let exported = export_all_sheets(
+                &model,
+                &refs,
+                &result,
+                &sheet_config,
+                &out_dir,
+                &file_stem,
+                tabs.as_ref(),
+            );
             let _ = tx.send(exported);
         });
     }
@@ -499,6 +521,7 @@ impl AppState {
             if idx < self.piece_orientations.len() {
                 self.piece_orientations.remove(idx);
             }
+            self.tab_state.results.clear();
             self.stats.pieces_total = self.pieces.len();
             self.start_optimizer();
         }
@@ -624,6 +647,7 @@ impl AppState {
         self.piece_orientations = retained_orientations;
         self.step_piece_refs = new_refs;
         self.stats.pieces_total = self.pieces.len();
+        self.tab_state.results.clear();
 
         if let Some(path) = self.step_source_path.clone() {
             self.assign_file_color(&path);
@@ -645,6 +669,32 @@ impl AppState {
         self.step_export_rx = None;
         self.step_export_status = None;
         self.step_source_path = None;
+        self.tab_state.results.clear();
+    }
+
+    /// Compute tabs for all placements in the current nesting result.
+    pub fn generate_tabs(&mut self) {
+        let Some(result) = self.current_result.as_ref() else {
+            self.tab_state.results.clear();
+            return;
+        };
+
+        let mut tab_results: HashMap<(usize, usize), Vec<Tab>> = HashMap::new();
+        for (sheet_idx, sheet) in result.sheets.iter().enumerate() {
+            for (placement_idx, placement) in sheet.placements.iter().enumerate() {
+                let Some(piece) = self.pieces.iter().find(|p| p.id == placement.piece_id) else {
+                    continue;
+                };
+                let rotated =
+                    polygon_ops::rotate(&piece.polygon, placement.rotation, Point2D { x: 0.0, y: 0.0 });
+                let placed = polygon_ops::translate(&rotated, placement.x, placement.y);
+                let tabs = tabs::generate_tabs(&placed, &self.tab_state.config);
+                if !tabs.is_empty() {
+                    tab_results.insert((sheet_idx, placement_idx), tabs);
+                }
+            }
+        }
+        self.tab_state.results = tab_results;
     }
 }
 

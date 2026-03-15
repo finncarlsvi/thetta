@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use thetta_geometry::types::MaterialType;
 
 #[derive(Debug, Clone)]
 pub enum PanelAction {
@@ -8,6 +9,7 @@ pub enum PanelAction {
     ToggleRun,
     DeleteSelected,
     Renest,
+    RegenerateTabs,
 }
 
 pub fn show_side_panel(ctx: &egui::Context, app: &mut AppState) -> Vec<PanelAction> {
@@ -139,6 +141,135 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut AppState) -> Vec<PanelActi
                     if ui.button(label).clicked() {
                         actions.push(PanelAction::ToggleRun);
                     }
+                });
+
+            ui.separator();
+            egui::CollapsingHeader::new("Tabs")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let cfg = &mut app.tab_state.config;
+                    let mut config_changed = false;
+
+                    egui::ComboBox::from_label("Material")
+                        .selected_text(match cfg.material_type {
+                            MaterialType::WoodSoft => "Wood (Soft)",
+                            MaterialType::WoodHard => "Wood (Hard)",
+                            MaterialType::Plastic => "Plastic",
+                            MaterialType::Composite => "Composite",
+                        })
+                        .show_ui(ui, |ui| {
+                            config_changed |= ui
+                                .selectable_value(
+                                    &mut cfg.material_type,
+                                    MaterialType::WoodSoft,
+                                    "Wood (Soft)",
+                                )
+                                .changed();
+                            config_changed |= ui
+                                .selectable_value(
+                                    &mut cfg.material_type,
+                                    MaterialType::WoodHard,
+                                    "Wood (Hard)",
+                                )
+                                .changed();
+                            config_changed |= ui
+                                .selectable_value(
+                                    &mut cfg.material_type,
+                                    MaterialType::Plastic,
+                                    "Plastic",
+                                )
+                                .changed();
+                            config_changed |= ui
+                                .selectable_value(
+                                    &mut cfg.material_type,
+                                    MaterialType::Composite,
+                                    "Composite",
+                                )
+                                .changed();
+                        });
+
+                    config_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut cfg.material_thickness, 1.0..=50.0)
+                                .text("Thickness (mm)"),
+                        )
+                        .changed();
+                    config_changed |= ui.checkbox(&mut cfg.auto_size, "Auto size").changed();
+
+                    if cfg.auto_size {
+                        ui.label(format!("Tab width: {:.2} mm", cfg.effective_tab_width()));
+                        ui.label(format!("Tab height: {:.2} mm", cfg.effective_tab_height()));
+                    } else {
+                        config_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut cfg.tab_width, 3.0..=30.0)
+                                    .text("Tab width (mm)"),
+                            )
+                            .changed();
+                        config_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut cfg.tab_height, 1.0..=20.0)
+                                    .text("Tab height (mm)"),
+                            )
+                            .changed();
+                    }
+
+                    config_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut cfg.tab_distance, 10.0..=200.0)
+                                .text("Distance (mm)"),
+                        )
+                        .changed();
+                    config_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut cfg.min_tabs)
+                                .range(1..=50)
+                                .prefix("Min tabs "),
+                        )
+                        .changed();
+                    config_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut cfg.max_tabs)
+                                .range(1..=50)
+                                .prefix("Max tabs "),
+                        )
+                        .changed();
+                    config_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut cfg.corner_exclusion, 0.0..=20.0)
+                                .text("Corner exclusion (mm)"),
+                        )
+                        .changed();
+                    config_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut cfg.size_threshold, 0.0..=100.0)
+                                .text("Size threshold (mm)"),
+                        )
+                        .changed();
+
+                    if cfg.min_tabs > cfg.max_tabs {
+                        cfg.max_tabs = cfg.min_tabs;
+                        config_changed = true;
+                    }
+
+                    if ui.button("Regenerate Tabs").clicked() {
+                        actions.push(PanelAction::RegenerateTabs);
+                    }
+                    if config_changed {
+                        actions.push(PanelAction::RegenerateTabs);
+                    }
+
+                    let total_tabs: usize = app.tab_state.results.values().map(Vec::len).sum();
+                    let tabbed_pieces = app.tab_state.results.len();
+                    let total_placements = app
+                        .current_result
+                        .as_ref()
+                        .map(|result| result.sheets.iter().map(|s| s.placements.len()).sum())
+                        .unwrap_or(0usize);
+                    let skipped = total_placements.saturating_sub(tabbed_pieces);
+                    ui.label(format!(
+                        "{total_tabs} tabs across {tabbed_pieces} pieces ({skipped} pieces skipped)"
+                    ));
                 });
 
             ui.separator();

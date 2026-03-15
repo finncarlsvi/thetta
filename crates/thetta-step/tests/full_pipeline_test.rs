@@ -74,6 +74,7 @@ fn full_pipeline_single_box() {
         &sheet_config,
         &out_dir,
         "pipeline",
+        None,
     )
     .unwrap();
     assert_eq!(exported.len(), 1);

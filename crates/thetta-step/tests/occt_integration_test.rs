@@ -177,6 +177,7 @@ fn occt_roundtrip_export_reimport() {
         &sheet_config,
         &dir,
         "nested",
+        None,
     )
     .unwrap();
     assert_eq!(out.len(), 1);

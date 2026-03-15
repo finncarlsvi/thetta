@@ -94,3 +94,99 @@ pub struct Sheet {
     #[serde(default)]
     pub strip_length: f64,
 }
+
+/// Material type for tab sizing heuristics (RESEARCH-005 Section 4.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MaterialType {
+    WoodSoft,
+    WoodHard,
+    Plastic,
+    Composite,
+}
+
+/// A single holding tab on a piece contour.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tab {
+    /// World-space position on the contour edge.
+    pub position: Point2D,
+    /// Index of the edge in the polygon outer ring.
+    pub edge_index: usize,
+    /// Parameter along the edge (0.0 = start, 1.0 = end).
+    pub t: f64,
+    /// Tab width in mm along cutting direction.
+    pub width: f64,
+    /// Tab height in mm from cut bottom.
+    pub height: f64,
+}
+
+/// Configuration for automatic tab placement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TabConfig {
+    /// Target distance between tabs in mm.
+    pub tab_distance: f64,
+    /// Absolute minimum tab count per part.
+    pub min_tabs: usize,
+    /// Absolute maximum tab count per part.
+    pub max_tabs: usize,
+    /// Tab width in mm (manual mode), or computed from material.
+    pub tab_width: f64,
+    /// Tab height in mm (manual mode), or computed from material.
+    pub tab_height: f64,
+    /// Minimum perimeter in mm for a part to receive tabs.
+    pub size_threshold: f64,
+    /// Minimum distance from any polygon vertex in mm.
+    pub corner_exclusion: f64,
+    /// Material thickness in mm (used for auto sizing).
+    pub material_thickness: f64,
+    /// Material type (used for auto sizing).
+    pub material_type: MaterialType,
+    /// True: derive width/height from material settings. False: use manual values.
+    pub auto_size: bool,
+}
+
+impl Default for TabConfig {
+    fn default() -> Self {
+        Self {
+            tab_distance: 50.0,
+            min_tabs: 3,
+            max_tabs: 20,
+            tab_width: 10.0,
+            tab_height: 6.0,
+            size_threshold: 30.0,
+            corner_exclusion: 5.0,
+            material_thickness: 18.0,
+            material_type: MaterialType::WoodSoft,
+            auto_size: true,
+        }
+    }
+}
+
+impl TabConfig {
+    /// Compute effective tab height based on material properties.
+    pub fn effective_tab_height(&self) -> f64 {
+        if !self.auto_size {
+            return self.tab_height;
+        }
+
+        let ratio = match self.material_type {
+            MaterialType::WoodSoft => 0.40,
+            MaterialType::WoodHard => 0.33,
+            MaterialType::Plastic => 0.33,
+            MaterialType::Composite => 0.50,
+        };
+        ratio * self.material_thickness
+    }
+
+    /// Compute effective tab width based on material properties.
+    pub fn effective_tab_width(&self) -> f64 {
+        if !self.auto_size {
+            return self.tab_width;
+        }
+        (1.5 * self.effective_tab_height()).clamp(5.0, 25.0)
+    }
+
+    /// Validated tab distance (minimum 1.0 mm).
+    pub fn effective_tab_distance(&self) -> f64 {
+        self.tab_distance.max(1.0)
+    }
+}
