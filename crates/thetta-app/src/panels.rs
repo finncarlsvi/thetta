@@ -363,7 +363,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut AppState) -> Vec<PanelActi
             egui::CollapsingHeader::new("G-code")
                 .default_open(true)
                 .show(ui, |ui| {
-                    egui::ComboBox::from_label("Tool")
+                    egui::ComboBox::from_label("Profile Tool")
                         .selected_text(
                             app.gcode_config
                                 .tool_number
@@ -380,6 +380,94 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut AppState) -> Vec<PanelActi
                                 );
                             }
                         });
+
+                    ui.separator();
+                    ui.collapsing("Drill", |ui| {
+                        ui.checkbox(&mut app.drill_config.enabled, "Enable drilling");
+                        ui.add_enabled_ui(app.drill_config.enabled, |ui| {
+                            egui::ComboBox::from_label("Drill Tool")
+                                .selected_text(
+                                    app.drill_config
+                                        .tool_number
+                                        .and_then(|n| app.tool_table.by_number(n))
+                                        .map(|t| format!("T{} {}", t.number, t.name))
+                                        .unwrap_or_else(|| "Select tool".to_string()),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for tool in &app.tool_table.tools {
+                                        ui.selectable_value(
+                                            &mut app.drill_config.tool_number,
+                                            Some(tool.number),
+                                            format!("T{} {} ({:.1}mm)", tool.number, tool.name, tool.diameter),
+                                        );
+                                    }
+                                });
+                            ui.add(
+                                egui::Slider::new(&mut app.drill_config.peck_depth, 1.0..=50.0)
+                                    .text("Peck depth (mm)"),
+                            );
+                            ui.collapsing("Advanced", |ui| {
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut app.drill_config.circularity_threshold,
+                                        0.5..=1.0,
+                                    )
+                                    .text("Circularity"),
+                                );
+                            });
+                        });
+                    });
+
+                    ui.collapsing("Pocket", |ui| {
+                        ui.checkbox(&mut app.pocket_config.enabled, "Enable pocketing");
+                        ui.add_enabled_ui(app.pocket_config.enabled, |ui| {
+                            egui::ComboBox::from_label("Pocket Tool")
+                                .selected_text(
+                                    app.pocket_config
+                                        .tool_number
+                                        .and_then(|n| app.tool_table.by_number(n))
+                                        .map(|t| format!("T{} {}", t.number, t.name))
+                                        .unwrap_or_else(|| "Select tool".to_string()),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for tool in &app.tool_table.tools {
+                                        ui.selectable_value(
+                                            &mut app.pocket_config.tool_number,
+                                            Some(tool.number),
+                                            format!("T{} {} ({:.1}mm)", tool.number, tool.name, tool.diameter),
+                                        );
+                                    }
+                                });
+                            ui.add(
+                                egui::Slider::new(&mut app.pocket_config.step_over, 0.1..=1.0)
+                                    .text("Step-over"),
+                            );
+                            ui.checkbox(&mut app.pocket_config.finish_pass, "Finish pass");
+                        });
+                    });
+
+                    let drill_label = if app.drill_config.enabled {
+                        app.drill_config
+                            .tool_number
+                            .map(|n| format!("Drill (T{n})"))
+                            .unwrap_or_else(|| "Drill (no tool)".to_string())
+                    } else {
+                        "Drill (off)".to_string()
+                    };
+                    let pocket_label = if app.pocket_config.enabled {
+                        app.pocket_config
+                            .tool_number
+                            .map(|n| format!("Pocket (T{n})"))
+                            .unwrap_or_else(|| "Pocket (no tool)".to_string())
+                    } else {
+                        "Pocket (off)".to_string()
+                    };
+                    let profile_label = app
+                        .gcode_config
+                        .tool_number
+                        .map(|n| format!("Profile (T{n})"))
+                        .unwrap_or_else(|| "Profile (no tool)".to_string());
+                    ui.label(format!("{drill_label} -> {pocket_label} -> {profile_label}"));
 
                     ui.add(
                         egui::Slider::new(&mut app.gcode_config.safe_z, 1.0..=20.0).text("Safe Z (mm)"),

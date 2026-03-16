@@ -323,6 +323,136 @@ impl Default for ProfileCutConfig {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_peck_depth() -> f64 {
+    5.0
+}
+
+fn default_circularity_threshold() -> f64 {
+    0.95
+}
+
+fn default_step_over() -> f64 {
+    0.5
+}
+
+/// Configuration for drill operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrillConfig {
+    /// Peck depth per cycle in mm (G83 Q value).
+    #[serde(default = "default_peck_depth")]
+    pub peck_depth: f64,
+    /// Tool number assigned to drill operations.
+    #[serde(default)]
+    pub tool_number: Option<u32>,
+    /// Enable or disable drill operations.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Circularity threshold in (0, 1].
+    #[serde(default = "default_circularity_threshold")]
+    pub circularity_threshold: f64,
+}
+
+impl Default for DrillConfig {
+    fn default() -> Self {
+        Self {
+            peck_depth: default_peck_depth(),
+            tool_number: None,
+            enabled: true,
+            circularity_threshold: default_circularity_threshold(),
+        }
+    }
+}
+
+impl DrillConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.peck_depth <= 0.0 || !self.peck_depth.is_finite() {
+            return Err("Peck depth must be positive".to_string());
+        }
+        if self.circularity_threshold <= 0.0
+            || self.circularity_threshold > 1.0
+            || !self.circularity_threshold.is_finite()
+        {
+            return Err("Circularity threshold must be in (0.0, 1.0]".to_string());
+        }
+        if self.enabled && self.tool_number.is_none() {
+            return Err("Drill operations enabled but no tool assigned".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Configuration for pocket clearing operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PocketConfig {
+    /// Step-over as fraction of tool diameter in (0, 1].
+    #[serde(default = "default_step_over")]
+    pub step_over: f64,
+    /// Tool number assigned to pocket operations.
+    #[serde(default)]
+    pub tool_number: Option<u32>,
+    /// Enable or disable pocket operations.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Optional finish pass along the wall.
+    #[serde(default)]
+    pub finish_pass: bool,
+}
+
+impl Default for PocketConfig {
+    fn default() -> Self {
+        Self {
+            step_over: default_step_over(),
+            tool_number: None,
+            enabled: true,
+            finish_pass: false,
+        }
+    }
+}
+
+impl PocketConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.step_over <= 0.0 || self.step_over > 1.0 || !self.step_over.is_finite() {
+            return Err("Step-over must be in (0.0, 1.0]".to_string());
+        }
+        if self.enabled && self.tool_number.is_none() {
+            return Err("Pocket operations enabled but no tool assigned".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Grouped operation configuration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OperationConfig {
+    pub drill: DrillConfig,
+    pub pocket: PocketConfig,
+    pub profile: ProfileCutConfig,
+}
+
+/// A hole classified for drilling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrillHole {
+    pub center: Point2D,
+    pub diameter: f64,
+}
+
+/// A hole classified for pocket clearing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PocketRegion {
+    pub contour: Vec<Point2D>,
+}
+
+/// Classification result for a single hole contour.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HoleClassification {
+    Drill(DrillHole),
+    Pocket(PocketRegion),
+}
+
 /// 3D point used by CAM motion planning.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Point3D {
@@ -356,6 +486,28 @@ pub enum ToolpathMove {
     },
     Plunge {
         to_z: f64,
+        feed: f64,
+    },
+    /// Start a G83 peck drill canned cycle.
+    DrillCycleStart {
+        depth: f64,
+        peck_depth: f64,
+        retract_z: f64,
+        feed: f64,
+    },
+    /// Drill one hole in an active cycle.
+    DrillHole {
+        position: Point2D,
+    },
+    /// Cancel canned cycle mode (G80).
+    DrillCycleEnd,
+    /// Helical ramp move for pocket entry.
+    HelicalRamp {
+        center: Point2D,
+        radius: f64,
+        start_z: f64,
+        end_z: f64,
+        clockwise: bool,
         feed: f64,
     },
 }
@@ -431,6 +583,42 @@ mod tests {
         let cfg = GcodeConfig {
             tool_number: Some(1),
             ..GcodeConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn drill_config_validate_rules() {
+        let cfg = DrillConfig::default();
+        assert!(cfg.validate().is_err());
+
+        let cfg = DrillConfig {
+            enabled: false,
+            ..DrillConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+
+        let cfg = DrillConfig {
+            tool_number: Some(1),
+            ..DrillConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn pocket_config_validate_rules() {
+        let cfg = PocketConfig::default();
+        assert!(cfg.validate().is_err());
+
+        let cfg = PocketConfig {
+            enabled: false,
+            ..PocketConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+
+        let cfg = PocketConfig {
+            tool_number: Some(2),
+            ..PocketConfig::default()
         };
         assert!(cfg.validate().is_ok());
     }

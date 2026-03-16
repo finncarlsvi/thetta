@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use thetta_cam::generate::generate_all_sheets;
 use thetta_geometry::test_shapes;
 use thetta_geometry::types::{
-    GcodeConfig, NestingResult, Piece, PieceId, Placement, Point2D, ProfileCutConfig, Sheet, Tab, Tool,
+    DrillConfig, GcodeConfig, NestingResult, Piece, PieceId, Placement, PocketConfig, Point2D,
+    ProfileCutConfig, Sheet, Tab, Tool,
 };
 
 fn sample_tool() -> Tool {
@@ -43,6 +44,16 @@ fn test_empty_sheet_skipped() {
         &sample_tool(),
         &sample_cfg(),
         &ProfileCutConfig::default(),
+        None,
+        &DrillConfig {
+            enabled: false,
+            ..DrillConfig::default()
+        },
+        None,
+        &PocketConfig {
+            enabled: false,
+            ..PocketConfig::default()
+        },
     );
 
     assert!(gcode.is_empty());
@@ -106,11 +117,21 @@ fn test_multi_piece_sheet_generates_program() {
         &sample_tool(),
         &sample_cfg(),
         &ProfileCutConfig::default(),
+        None,
+        &DrillConfig {
+            enabled: false,
+            ..DrillConfig::default()
+        },
+        None,
+        &PocketConfig {
+            enabled: false,
+            ..PocketConfig::default()
+        },
     );
 
     assert_eq!(all.len(), 1);
     let text = &all[0].1;
-    assert!(text.contains("(Piece 1)"));
-    assert!(text.contains("(Piece 2)"));
+    assert!(text.contains("(Profile Path 1)"));
+    assert!(text.contains("(Profile Path 2)"));
     assert!(text.contains("G2") || text.contains("G3"));
 }

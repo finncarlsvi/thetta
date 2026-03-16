@@ -12,8 +12,8 @@ use thetta_cam::{generate, tool_db};
 use thetta_geometry::polygon_ops;
 use thetta_geometry::tabs;
 use thetta_geometry::types::{
-    GcodeConfig, NestingResult, Piece, PieceId, Point2D, ProfileCutConfig, SheetConfig, Tab,
-    TabConfig, Tool, ToolTable,
+    DrillConfig, GcodeConfig, NestingResult, Piece, PieceId, PocketConfig, Point2D,
+    ProfileCutConfig, SheetConfig, Tab, TabConfig, Tool, ToolTable,
 };
 use thetta_nesting::benchmark::load_benchmark;
 use thetta_nesting::conversion::rotation_range_to_samples;
@@ -112,6 +112,8 @@ pub struct AppState {
     pub tool_table: ToolTable,
     pub gcode_config: GcodeConfig,
     pub profile_config: ProfileCutConfig,
+    pub drill_config: DrillConfig,
+    pub pocket_config: PocketConfig,
     pub gcode_exporting: bool,
     pub gcode_status: Option<String>,
     pub gcode_error: Option<String>,
@@ -155,6 +157,8 @@ impl Default for AppState {
             tool_table: tool_db::load_tool_table(),
             gcode_config: GcodeConfig::default(),
             profile_config: ProfileCutConfig::default(),
+            drill_config: DrillConfig::default(),
+            pocket_config: PocketConfig::default(),
             gcode_exporting: false,
             gcode_status: None,
             gcode_error: None,
@@ -552,8 +556,20 @@ impl AppState {
         }
     }
 
-    pub fn selected_tool(&self) -> Option<&Tool> {
+    pub fn selected_profile_tool(&self) -> Option<&Tool> {
         self.gcode_config
+            .tool_number
+            .and_then(|number| self.tool_table.by_number(number))
+    }
+
+    pub fn selected_drill_tool(&self) -> Option<&Tool> {
+        self.drill_config
+            .tool_number
+            .and_then(|number| self.tool_table.by_number(number))
+    }
+
+    pub fn selected_pocket_tool(&self) -> Option<&Tool> {
+        self.pocket_config
             .tool_number
             .and_then(|number| self.tool_table.by_number(number))
     }
@@ -565,11 +581,25 @@ impl AppState {
         if self.pieces.is_empty() {
             return Some("No pieces loaded".to_string());
         }
-        self.gcode_config.validate().err().or_else(|| {
-            self.selected_tool()
-                .ok_or_else(|| "Selected tool not found".to_string())
-                .err()
-        })
+        if let Err(err) = self.gcode_config.validate() {
+            return Some(err);
+        }
+        if self.selected_profile_tool().is_none() {
+            return Some("Selected profile tool not found".to_string());
+        }
+        if let Err(err) = self.drill_config.validate() {
+            return Some(err);
+        }
+        if self.drill_config.enabled && self.selected_drill_tool().is_none() {
+            return Some("Selected drill tool not found".to_string());
+        }
+        if let Err(err) = self.pocket_config.validate() {
+            return Some(err);
+        }
+        if self.pocket_config.enabled && self.selected_pocket_tool().is_none() {
+            return Some("Selected pocket tool not found".to_string());
+        }
+        None
     }
 
     pub fn start_gcode_export(&mut self, output_dir: PathBuf) {
@@ -581,9 +611,11 @@ impl AppState {
         let Some(result) = self.current_result.clone() else {
             return;
         };
-        let Some(tool) = self.selected_tool().cloned() else {
+        let Some(profile_tool) = self.selected_profile_tool().cloned() else {
             return;
         };
+        let drill_tool = self.selected_drill_tool().cloned();
+        let pocket_tool = self.selected_pocket_tool().cloned();
 
         self.gcode_error = None;
         self.gcode_status = None;
@@ -593,6 +625,8 @@ impl AppState {
         let tabs = self.tab_state.results.clone();
         let gcode_config = self.gcode_config.clone();
         let profile_config = self.profile_config.clone();
+        let drill_config = self.drill_config.clone();
+        let pocket_config = self.pocket_config.clone();
         let (tx, rx) = mpsc::channel();
         self.gcode_rx = Some(rx);
 
@@ -601,9 +635,13 @@ impl AppState {
                 &result,
                 &pieces,
                 &tabs,
-                &tool,
+                &profile_tool,
                 &gcode_config,
                 &profile_config,
+                drill_tool.as_ref(),
+                &drill_config,
+                pocket_tool.as_ref(),
+                &pocket_config,
             );
             let mut written = Vec::new();
             for (sheet_idx, gcode) in sheets {
