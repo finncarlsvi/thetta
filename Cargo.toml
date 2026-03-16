@@ -6,6 +6,7 @@ members = [
     "crates/thetta-nesting",
     "crates/thetta-step",
     "crates/thetta-geometry",
+    "crates/thetta-cam",
 ]
 
 [workspace.package]

@@ -34,6 +34,18 @@ pub fn request_export_target(default_name: String) -> mpsc::Receiver<Option<(Pat
     rx
 }
 
+/// Non-blocking folder picker for G-code output.
+pub fn request_gcode_directory() -> mpsc::Receiver<Option<PathBuf>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = rfd::FileDialog::new()
+            .set_title("Select G-code Output Directory")
+            .pick_folder();
+        let _ = tx.send(result);
+    });
+    rx
+}
+
 fn file_stem_or_default(path: &Path, fallback: &str) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())

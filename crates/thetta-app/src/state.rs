@@ -8,9 +8,13 @@ use std::time::{Duration, Instant};
 
 use egui::Color32;
 use jagua_rs::geometry::geo_enums::RotationRange;
+use thetta_cam::{generate, tool_db};
 use thetta_geometry::polygon_ops;
 use thetta_geometry::tabs;
-use thetta_geometry::types::{NestingResult, Piece, PieceId, Point2D, SheetConfig, Tab, TabConfig};
+use thetta_geometry::types::{
+    GcodeConfig, NestingResult, Piece, PieceId, Point2D, ProfileCutConfig, SheetConfig, Tab,
+    TabConfig, Tool, ToolTable,
+};
 use thetta_nesting::benchmark::load_benchmark;
 use thetta_nesting::conversion::rotation_range_to_samples;
 use thetta_nesting::gls::OptimizerConfig;
@@ -105,6 +109,14 @@ pub struct AppState {
     pub step_config: ExtractionConfig,
     pub step_dialog_rx: Option<Receiver<Option<PathBuf>>>,
     pub export_dialog_rx: Option<Receiver<Option<(PathBuf, String)>>>,
+    pub tool_table: ToolTable,
+    pub gcode_config: GcodeConfig,
+    pub profile_config: ProfileCutConfig,
+    pub gcode_exporting: bool,
+    pub gcode_status: Option<String>,
+    pub gcode_error: Option<String>,
+    pub gcode_rx: Option<Receiver<Result<Vec<PathBuf>, String>>>,
+    pub gcode_dialog_rx: Option<Receiver<Option<PathBuf>>>,
 }
 
 impl Default for AppState {
@@ -140,6 +152,14 @@ impl Default for AppState {
             step_config: ExtractionConfig::default(),
             step_dialog_rx: None,
             export_dialog_rx: None,
+            tool_table: tool_db::load_tool_table(),
+            gcode_config: GcodeConfig::default(),
+            profile_config: ProfileCutConfig::default(),
+            gcode_exporting: false,
+            gcode_status: None,
+            gcode_error: None,
+            gcode_rx: None,
+            gcode_dialog_rx: None,
         }
     }
 }
@@ -353,6 +373,25 @@ impl AppState {
         }
     }
 
+    pub fn poll_gcode_dialog(&mut self) -> Option<PathBuf> {
+        let rx = self.gcode_dialog_rx.as_ref()?;
+        match rx.try_recv() {
+            Ok(Some(path)) => {
+                self.gcode_dialog_rx = None;
+                Some(path)
+            }
+            Ok(None) => {
+                self.gcode_dialog_rx = None;
+                None
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.gcode_dialog_rx = None;
+                None
+            }
+        }
+    }
+
     pub fn start_step_import(&mut self, path: PathBuf) {
         self.step_loading = true;
         self.step_error = None;
@@ -509,6 +548,97 @@ impl AppState {
                 self.step_exporting = false;
                 self.step_export_rx = None;
                 self.step_error = Some("STEP export thread disconnected".to_string());
+            }
+        }
+    }
+
+    pub fn selected_tool(&self) -> Option<&Tool> {
+        self.gcode_config
+            .tool_number
+            .and_then(|number| self.tool_table.by_number(number))
+    }
+
+    pub fn gcode_export_precondition_error(&self) -> Option<String> {
+        if self.current_result.is_none() {
+            return Some("No nesting result available".to_string());
+        }
+        if self.pieces.is_empty() {
+            return Some("No pieces loaded".to_string());
+        }
+        self.gcode_config.validate().err().or_else(|| {
+            self.selected_tool()
+                .ok_or_else(|| "Selected tool not found".to_string())
+                .err()
+        })
+    }
+
+    pub fn start_gcode_export(&mut self, output_dir: PathBuf) {
+        if let Some(err) = self.gcode_export_precondition_error() {
+            self.gcode_error = Some(err);
+            return;
+        }
+
+        let Some(result) = self.current_result.clone() else {
+            return;
+        };
+        let Some(tool) = self.selected_tool().cloned() else {
+            return;
+        };
+
+        self.gcode_error = None;
+        self.gcode_status = None;
+        self.gcode_exporting = true;
+
+        let pieces = self.pieces.clone();
+        let tabs = self.tab_state.results.clone();
+        let gcode_config = self.gcode_config.clone();
+        let profile_config = self.profile_config.clone();
+        let (tx, rx) = mpsc::channel();
+        self.gcode_rx = Some(rx);
+
+        thread::spawn(move || {
+            let sheets = generate::generate_all_sheets(
+                &result,
+                &pieces,
+                &tabs,
+                &tool,
+                &gcode_config,
+                &profile_config,
+            );
+            let mut written = Vec::new();
+            for (sheet_idx, gcode) in sheets {
+                let filename = format!("sheet_{}.ngc", sheet_idx + 1);
+                let path = output_dir.join(&filename);
+                if let Err(err) = std::fs::write(&path, gcode) {
+                    let _ = tx.send(Err(format!("Failed to write {filename}: {err}")));
+                    return;
+                }
+                written.push(path);
+            }
+            let _ = tx.send(Ok(written));
+        });
+    }
+
+    pub fn poll_gcode_export(&mut self) {
+        let Some(rx) = &self.gcode_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(paths)) => {
+                self.gcode_exporting = false;
+                self.gcode_rx = None;
+                self.gcode_status = Some(format!("Exported {} G-code file(s)", paths.len()));
+            }
+            Ok(Err(err)) => {
+                self.gcode_exporting = false;
+                self.gcode_rx = None;
+                self.gcode_error = Some(err);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.gcode_exporting = false;
+                self.gcode_rx = None;
+                self.gcode_error = Some("G-code export thread disconnected".to_string());
             }
         }
     }

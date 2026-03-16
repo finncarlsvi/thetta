@@ -39,6 +39,7 @@ impl eframe::App for ThettaApp {
         self.state.poll_updates();
         self.state.poll_step_import();
         self.state.poll_step_export();
+        self.state.poll_gcode_export();
 
         // Poll file dialogs (non-blocking)
         if let Some(path) = self.state.poll_step_dialog() {
@@ -47,6 +48,9 @@ impl eframe::App for ThettaApp {
         }
         if let Some((out_dir, file_stem)) = self.state.poll_export_dialog() {
             self.state.start_step_export(out_dir, file_stem);
+        }
+        if let Some(out_dir) = self.state.poll_gcode_dialog() {
+            self.state.start_gcode_export(out_dir);
         }
 
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
@@ -89,6 +93,15 @@ impl eframe::App for ThettaApp {
                 }
                 PanelAction::RegenerateTabs => {
                     self.state.generate_tabs();
+                }
+                PanelAction::SaveToolTable => {
+                    if let Err(err) = thetta_cam::tool_db::save_tool_table(&self.state.tool_table)
+                    {
+                        self.error_text = Some(format!("Failed to save tool table: {err}"));
+                    }
+                }
+                PanelAction::OpenGcodeDialog => {
+                    self.state.gcode_dialog_rx = Some(native_dialog::request_gcode_directory());
                 }
             }
         }

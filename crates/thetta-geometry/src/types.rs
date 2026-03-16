@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -188,5 +189,249 @@ impl TabConfig {
     /// Validated tab distance (minimum 1.0 mm).
     pub fn effective_tab_distance(&self) -> f64 {
         self.tab_distance.max(1.0)
+    }
+}
+
+/// A cutting tool in the persistent tool database.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tool {
+    /// LinuxCNC tool number (T1, T2, ...).
+    pub number: u32,
+    /// Human-readable tool name.
+    pub name: String,
+    /// Tool diameter in mm.
+    pub diameter: f64,
+    /// Number of cutting flutes.
+    pub flute_count: u32,
+    /// Horizontal feed rate in mm/min.
+    pub feed_rate: f64,
+    /// Vertical plunge rate in mm/min.
+    pub plunge_rate: f64,
+    /// Spindle speed in RPM.
+    pub spindle_speed: u32,
+}
+
+impl Tool {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.diameter <= 0.0 || !self.diameter.is_finite() {
+            return Err(format!("T{}: diameter must be positive", self.number));
+        }
+        if self.feed_rate <= 0.0 || !self.feed_rate.is_finite() {
+            return Err(format!("T{}: feed rate must be positive", self.number));
+        }
+        if self.plunge_rate <= 0.0 || !self.plunge_rate.is_finite() {
+            return Err(format!("T{}: plunge rate must be positive", self.number));
+        }
+        if self.spindle_speed == 0 {
+            return Err(format!("T{}: spindle speed must be positive", self.number));
+        }
+        Ok(())
+    }
+}
+
+/// Persistent collection of tools.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ToolTable {
+    pub tools: Vec<Tool>,
+}
+
+impl ToolTable {
+    pub fn by_number(&self, number: u32) -> Option<&Tool> {
+        self.tools.iter().find(|tool| tool.number == number)
+    }
+
+    pub fn next_number(&self) -> u32 {
+        self.tools.iter().map(|tool| tool.number).max().unwrap_or(0) + 1
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = HashSet::new();
+        for tool in &self.tools {
+            if !seen.insert(tool.number) {
+                return Err(format!("Duplicate tool number: T{}", tool.number));
+            }
+            tool.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Parameters shared across G-code generation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GcodeConfig {
+    /// Safe Z height for rapid moves, in mm.
+    pub safe_z: f64,
+    /// Full profile depth into material, in mm.
+    pub cut_depth: f64,
+    /// Selected tool number for profile operations.
+    pub tool_number: Option<u32>,
+    /// Active machine coordinate system (`G54`, `G55`, ...).
+    pub coordinate_system: String,
+}
+
+impl Default for GcodeConfig {
+    fn default() -> Self {
+        Self {
+            safe_z: 5.0,
+            cut_depth: 18.0,
+            tool_number: None,
+            coordinate_system: "G54".to_string(),
+        }
+    }
+}
+
+impl GcodeConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.safe_z <= 0.0 || !self.safe_z.is_finite() {
+            return Err("Safe Z must be positive".to_string());
+        }
+        if self.cut_depth <= 0.0 || !self.cut_depth.is_finite() {
+            return Err("Cut depth must be positive".to_string());
+        }
+        if self.tool_number.is_none() {
+            return Err("No tool selected".to_string());
+        }
+        if self.coordinate_system.trim().is_empty() {
+            return Err("Coordinate system must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Cutting strategy direction for profile cuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CutDirection {
+    Conventional,
+    Climb,
+}
+
+/// Parameters for profile cut generation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProfileCutConfig {
+    /// Radius of lead-in / lead-out tangential arc, in mm.
+    pub lead_in_radius: f64,
+    /// Direction around contour.
+    pub cutting_direction: CutDirection,
+}
+
+impl Default for ProfileCutConfig {
+    fn default() -> Self {
+        Self {
+            lead_in_radius: 3.0,
+            cutting_direction: CutDirection::Conventional,
+        }
+    }
+}
+
+/// 3D point used by CAM motion planning.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Point3D {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+/// A single planned tool motion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ToolpathMove {
+    Rapid {
+        to: Point3D,
+    },
+    LinearCut {
+        to: Point3D,
+        feed: f64,
+    },
+    ArcCut {
+        to: Point3D,
+        center: Point2D,
+        clockwise: bool,
+        feed: f64,
+    },
+    TabLift {
+        to: Point3D,
+        tab_height: f64,
+    },
+    Retract {
+        to_z: f64,
+    },
+    Plunge {
+        to_z: f64,
+        feed: f64,
+    },
+}
+
+/// Complete toolpath for one operation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Toolpath {
+    pub moves: Vec<ToolpathMove>,
+    pub config: GcodeConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_tool(number: u32) -> Tool {
+        Tool {
+            number,
+            name: "6mm 2F".to_string(),
+            diameter: 6.0,
+            flute_count: 2,
+            feed_rate: 1500.0,
+            plunge_rate: 500.0,
+            spindle_speed: 18000,
+        }
+    }
+
+    #[test]
+    fn tool_table_next_number_and_lookup() {
+        let mut table = ToolTable::default();
+        assert_eq!(table.next_number(), 1);
+        table.tools.push(sample_tool(2));
+        table.tools.push(sample_tool(10));
+        assert_eq!(table.next_number(), 11);
+        assert_eq!(table.by_number(2).map(|t| t.number), Some(2));
+        assert!(table.by_number(3).is_none());
+    }
+
+    #[test]
+    fn tool_table_validate_rejects_duplicate_numbers() {
+        let table = ToolTable {
+            tools: vec![sample_tool(1), sample_tool(1)],
+        };
+        let err = table.validate().unwrap_err();
+        assert!(err.contains("Duplicate tool number"));
+    }
+
+    #[test]
+    fn tool_table_validate_rejects_invalid_tool_fields() {
+        let mut bad = sample_tool(1);
+        bad.diameter = 0.0;
+        let table = ToolTable { tools: vec![bad] };
+        assert!(table.validate().is_err());
+    }
+
+    #[test]
+    fn gcode_config_validate_rejects_invalid_values() {
+        let cfg = GcodeConfig {
+            safe_z: -1.0,
+            ..GcodeConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+
+        let cfg = GcodeConfig {
+            cut_depth: 0.0,
+            ..GcodeConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+
+        let cfg = GcodeConfig::default();
+        assert!(cfg.validate().is_err());
+
+        let cfg = GcodeConfig {
+            tool_number: Some(1),
+            ..GcodeConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
     }
 }

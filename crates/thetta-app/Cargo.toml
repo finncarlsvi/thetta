@@ -7,6 +7,7 @@ edition.workspace = true
 thetta-geometry = { path = "../thetta-geometry" }
 thetta-nesting = { path = "../thetta-nesting" }
 thetta-step = { path = "../thetta-step", features = ["occt"] }
+thetta-cam = { path = "../thetta-cam" }
 jagua-rs = { path = "../jagua-rs", features = ["spp"] }
 eframe = "0.31"
 egui = "0.31"

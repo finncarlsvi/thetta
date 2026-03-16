@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use thetta_geometry::types::MaterialType;
+use thetta_geometry::types::{MaterialType, Tool};
 
 #[derive(Debug, Clone)]
 pub enum PanelAction {
@@ -10,6 +10,8 @@ pub enum PanelAction {
     DeleteSelected,
     Renest,
     RegenerateTabs,
+    SaveToolTable,
+    OpenGcodeDialog,
 }
 
 pub fn show_side_panel(ctx: &egui::Context, app: &mut AppState) -> Vec<PanelAction> {
@@ -270,6 +272,151 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut AppState) -> Vec<PanelActi
                     ui.label(format!(
                         "{total_tabs} tabs across {tabbed_pieces} pieces ({skipped} pieces skipped)"
                     ));
+                });
+
+            ui.separator();
+            egui::CollapsingHeader::new("Tool Database")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let mut changed = false;
+
+                    if ui.button("Add Tool").clicked() {
+                        app.tool_table.tools.push(Tool {
+                            number: app.tool_table.next_number(),
+                            name: "New Tool".to_string(),
+                            diameter: 6.0,
+                            flute_count: 2,
+                            feed_rate: 1500.0,
+                            plunge_rate: 500.0,
+                            spindle_speed: 18000,
+                        });
+                        changed = true;
+                    }
+
+                    let mut remove_index = None;
+                    for (idx, tool) in app.tool_table.tools.iter_mut().enumerate() {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(format!("T{}", tool.number));
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut tool.number).range(1..=999))
+                                .changed();
+                            changed |= ui.text_edit_singleline(&mut tool.name).changed();
+                            if ui.button("Delete").clicked() {
+                                remove_index = Some(idx);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut tool.diameter)
+                                        .speed(0.1)
+                                        .prefix("Dia "),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut tool.flute_count)
+                                        .range(1..=16)
+                                        .prefix("Flutes "),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut tool.feed_rate)
+                                        .speed(10.0)
+                                        .prefix("Feed "),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut tool.plunge_rate)
+                                        .speed(10.0)
+                                        .prefix("Plunge "),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut tool.spindle_speed)
+                                        .range(1..=50000)
+                                        .prefix("RPM "),
+                                )
+                                .changed();
+                        });
+                    }
+
+                    if let Some(idx) = remove_index {
+                        app.tool_table.tools.remove(idx);
+                        changed = true;
+                    }
+
+                    if let Err(err) = app.tool_table.validate() {
+                        ui.colored_label(egui::Color32::from_rgb(200, 60, 60), err);
+                    }
+
+                    if changed {
+                        actions.push(PanelAction::SaveToolTable);
+                    }
+                });
+
+            ui.separator();
+            egui::CollapsingHeader::new("G-code")
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::ComboBox::from_label("Tool")
+                        .selected_text(
+                            app.gcode_config
+                                .tool_number
+                                .and_then(|n| app.tool_table.by_number(n))
+                                .map(|t| format!("T{} {}", t.number, t.name))
+                                .unwrap_or_else(|| "Select tool".to_string()),
+                        )
+                        .show_ui(ui, |ui| {
+                            for tool in &app.tool_table.tools {
+                                ui.selectable_value(
+                                    &mut app.gcode_config.tool_number,
+                                    Some(tool.number),
+                                    format!("T{} {} ({:.1}mm)", tool.number, tool.name, tool.diameter),
+                                );
+                            }
+                        });
+
+                    ui.add(
+                        egui::Slider::new(&mut app.gcode_config.safe_z, 1.0..=20.0).text("Safe Z (mm)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut app.gcode_config.cut_depth, 1.0..=50.0)
+                            .text("Cut depth (mm)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut app.profile_config.lead_in_radius, 0.5..=10.0)
+                            .text("Lead radius (mm)"),
+                    );
+
+                    if let Some(status) = &app.gcode_status {
+                        ui.label(status);
+                    }
+                    if let Some(err) = &app.gcode_error {
+                        ui.colored_label(egui::Color32::from_rgb(200, 60, 60), err);
+                    }
+
+                    let precondition_error = app.gcode_export_precondition_error();
+                    let can_export = precondition_error.is_none() && !app.gcode_exporting;
+                    if let Some(err) = precondition_error {
+                        ui.label(err);
+                    }
+                    if app.gcode_exporting {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Generating G-code...");
+                        });
+                    }
+                    if ui
+                        .add_enabled(can_export, egui::Button::new("Generate G-code"))
+                        .clicked()
+                    {
+                        actions.push(PanelAction::OpenGcodeDialog);
+                    }
                 });
 
             ui.separator();
