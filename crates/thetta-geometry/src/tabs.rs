@@ -10,10 +10,13 @@ struct EdgeInfo {
     length: f64,
     score: f64,
     weight: f64,
-    target_tabs: f64,
 }
 
 /// Generate holding tabs for a placed (world-space) outer contour.
+///
+/// Uses a perimeter-centric approach: places tabs at even arc-length intervals
+/// around the full contour, then snaps each to the nearest valid edge position
+/// (respecting corner exclusions and edge scores).
 pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
     if contour.outer.len() < 3 {
         return Vec::new();
@@ -49,101 +52,41 @@ pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
 
     let min_length = tab_width + 2.0 * config.corner_exclusion;
     let mut edges = Vec::with_capacity(n);
+    // Cumulative arc-length at start of each edge
+    let mut edge_starts = Vec::with_capacity(n);
+    let mut cumulative = 0.0;
     for i in 0..n {
         let a = contour.outer[i];
         let b = contour.outer[(i + 1) % n];
         let length = edge_length(a, b);
         let score = score_edge(vertex_scores[i], vertex_scores[(i + 1) % n], length, min_length);
+        edge_starts.push(cumulative);
         edges.push(EdgeInfo {
             index: i,
             length,
             score,
             weight: length * score,
-            target_tabs: 0.0,
         });
+        cumulative += length;
     }
 
-    let total_weight: f64 = edges.iter().map(|e| e.weight).sum();
-    if total_weight <= 0.0 || !total_weight.is_finite() {
-        return Vec::new();
-    }
-
-    let mut edge_tabs = vec![0usize; n];
-    for edge in &mut edges {
-        edge.target_tabs = target_count as f64 * (edge.weight / total_weight);
-        edge_tabs[edge.index] = edge.target_tabs.round() as usize;
-    }
-
-    let mut allocated = edge_tabs.iter().sum::<usize>();
-    if allocated < target_count {
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| {
-            let ra = edges[a].target_tabs - edge_tabs[a] as f64;
-            let rb = edges[b].target_tabs - edge_tabs[b] as f64;
-            rb.total_cmp(&ra)
-                .then_with(|| edges[b].weight.total_cmp(&edges[a].weight))
-                .then_with(|| a.cmp(&b))
-        });
-        let mut idx = 0usize;
-        while allocated < target_count {
-            let edge_idx = order[idx % order.len()];
-            if edges[edge_idx].score > 0.0 {
-                edge_tabs[edge_idx] += 1;
-                allocated += 1;
-            }
-            idx += 1;
-            if idx > n * (target_count + 1) {
-                break;
-            }
-        }
-    } else if allocated > target_count {
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| {
-            edges[a]
-                .weight
-                .total_cmp(&edges[b].weight)
-                .then_with(|| a.cmp(&b))
-        });
-        let mut idx = 0usize;
-        while allocated > target_count {
-            let edge_idx = order[idx % order.len()];
-            if edge_tabs[edge_idx] > 0 {
-                edge_tabs[edge_idx] -= 1;
-                allocated -= 1;
-            }
-            idx += 1;
-            if idx > n * (allocated + 1) {
-                break;
-            }
-        }
-    }
-
+    // Place tabs at even arc-length intervals, then snap to nearest valid position
+    let spacing = contour_perimeter / target_count as f64;
     let mut tabs = Vec::new();
-    for edge in &edges {
-        let tabs_on_edge = edge_tabs[edge.index];
-        if tabs_on_edge == 0 || edge.length <= EPS {
-            continue;
-        }
 
-        let usable_start = config.corner_exclusion / edge.length;
-        let usable_end = 1.0 - usable_start;
-        let usable_range = usable_end - usable_start;
-        if usable_range <= 0.0 {
-            continue;
-        }
-
-        let a = contour.outer[edge.index];
-        let b = contour.outer[(edge.index + 1) % n];
-        let spacing = usable_range / (tabs_on_edge + 1) as f64;
-        for j in 1..=tabs_on_edge {
-            let t = usable_start + spacing * j as f64;
-            tabs.push(Tab {
-                position: point_on_edge(a, b, t),
-                edge_index: edge.index,
-                t,
-                width: tab_width,
-                height: tab_height,
-            });
+    for i in 0..target_count {
+        let ideal_arc = spacing * i as f64 + spacing * 0.5; // offset by half-spacing for centering
+        if let Some(tab) = snap_to_nearest_valid(
+            ideal_arc,
+            contour,
+            &edges,
+            &edge_starts,
+            contour_perimeter,
+            config.corner_exclusion,
+            tab_width,
+            tab_height,
+        ) {
+            tabs.push(tab);
         }
     }
 
@@ -151,6 +94,7 @@ pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
         return tabs;
     }
 
+    // Remove tabs that ended up too close after snapping
     remove_spacing_conflicts(
         &mut tabs,
         &edges,
@@ -158,6 +102,7 @@ pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
         2.0 * tab_width,
     );
 
+    // Ensure minimum tab count by adding tabs on unused high-weight edges
     if tabs.len() < config.min_tabs {
         let mut candidates: Vec<usize> = edges
             .iter()
@@ -204,6 +149,93 @@ pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
             .then_with(|| a.t.total_cmp(&b.t))
     });
     tabs
+}
+
+/// Snap an ideal arc-length position to the nearest valid tab placement.
+/// Searches outward from the ideal position, preferring higher-scored edges.
+fn snap_to_nearest_valid(
+    ideal_arc: f64,
+    contour: &Polygon,
+    edges: &[EdgeInfo],
+    edge_starts: &[f64],
+    contour_perimeter: f64,
+    corner_exclusion: f64,
+    tab_width: f64,
+    tab_height: f64,
+) -> Option<Tab> {
+    let n = edges.len();
+
+    // Find which edge the ideal position falls on
+    let edge_idx = find_edge_at_arc(ideal_arc, edge_starts, contour_perimeter);
+
+    // Try the ideal edge first, then search outward in both directions
+    let max_search = (n + 1) / 2;
+    for offset in 0..=max_search {
+        // Try edges at +offset and -offset from the ideal
+        let indices: Vec<usize> = if offset == 0 {
+            vec![edge_idx]
+        } else {
+            vec![
+                (edge_idx + offset) % n,
+                (edge_idx + n - offset) % n,
+            ]
+        };
+
+        for &ei in &indices {
+            if edges[ei].score <= 0.0 || edges[ei].length <= EPS {
+                continue;
+            }
+
+            // Compute the valid t-range on this edge (excluding corners)
+            let excl_t = corner_exclusion / edges[ei].length;
+            let t_min = excl_t;
+            let t_max = 1.0 - excl_t;
+            if t_min >= t_max {
+                continue;
+            }
+
+            // Find the t-parameter closest to the ideal arc position
+            let t = if ei == edge_idx && offset == 0 {
+                // Ideal position is on this edge — compute exact t
+                let local_arc = ideal_arc - edge_starts[ei];
+                (local_arc / edges[ei].length).clamp(t_min, t_max)
+            } else {
+                // For neighboring edges, place at midpoint of usable range
+                (t_min + t_max) * 0.5
+            };
+
+            let a = contour.outer[ei];
+            let b = contour.outer[(ei + 1) % n];
+            return Some(Tab {
+                position: point_on_edge(a, b, t),
+                edge_index: ei,
+                t,
+                width: tab_width,
+                height: tab_height,
+            });
+        }
+    }
+
+    None
+}
+
+/// Find which edge an arc-length position falls on via binary search.
+fn find_edge_at_arc(arc: f64, edge_starts: &[f64], _contour_perimeter: f64) -> usize {
+    let n = edge_starts.len();
+    if n == 0 {
+        return 0;
+    }
+    // Binary search: find the last edge whose start <= arc
+    match edge_starts.binary_search_by(|s| s.total_cmp(&arc)) {
+        Ok(i) => i,
+        Err(i) => {
+            if i == 0 {
+                n - 1 // wraps around
+            } else {
+                i - 1
+            }
+        }
+    }
 }
 
 fn classify_vertex(prev: Point2D, curr: Point2D, next: Point2D) -> f64 {
@@ -351,8 +383,7 @@ mod tests {
                     length: len,
                     score: 1.0,
                     weight: len,
-                    target_tabs: 0.0,
-                }
+                        }
             })
             .collect::<Vec<_>>();
         let mut ordered = tabs
