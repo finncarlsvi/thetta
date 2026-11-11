@@ -39,11 +39,8 @@ pub fn contour_effective_diameter(contour: &[Point2D], center: Point2D) -> f64 {
         return 0.0;
     }
 
-    let avg_radius = contour
-        .iter()
-        .map(|p| edge_length(*p, center))
-        .sum::<f64>()
-        / contour.len() as f64;
+    let avg_radius =
+        contour.iter().map(|p| edge_length(*p, center)).sum::<f64>() / contour.len() as f64;
     2.0 * avg_radius
 }
 
@@ -64,7 +61,7 @@ pub fn classify_holes(
             if let Some(tool_dia) = drill_tool_diameter {
                 let center = contour_center(hole);
                 let hole_dia = contour_effective_diameter(hole, center);
-                if tool_dia <= hole_dia {
+                if (tool_dia - hole_dia).abs() <= 0.02 {
                     out.push(HoleClassification::Drill(DrillHole {
                         center,
                         diameter: hole_dia,
@@ -144,7 +141,7 @@ mod tests {
     #[test]
     fn circle_classified_as_drill() {
         let holes = vec![circle(5.0, 32)];
-        let out = classify_holes(&holes, 0.95, Some(9.0));
+        let out = classify_holes(&holes, 0.95, Some(10.0));
         assert_eq!(out.len(), 1);
         match &out[0] {
             HoleClassification::Drill(hole) => {
@@ -166,8 +163,8 @@ mod tests {
     #[test]
     fn near_circle_threshold_dependent() {
         let holes = vec![circle(5.0, 8)];
-        let hi = classify_holes(&holes, 0.96, Some(9.0));
-        let lo = classify_holes(&holes, 0.90, Some(9.0));
+        let hi = classify_holes(&holes, 0.96, Some(10.0));
+        let lo = classify_holes(&holes, 0.90, Some(10.0));
         assert!(matches!(hi[0], HoleClassification::Pocket(_)));
         assert!(matches!(lo[0], HoleClassification::Drill(_)));
     }
@@ -179,6 +176,11 @@ mod tests {
         assert!(matches!(out[0], HoleClassification::Pocket(_)));
     }
 
+    #[test]
+    fn undersize_drill_cannot_finish_a_larger_hole() {
+        let out = classify_holes(&[circle(5., 32)], 0.95, Some(9.));
+        assert!(matches!(out[0], HoleClassification::Pocket(_)));
+    }
     #[test]
     fn empty_input_yields_empty() {
         let out = classify_holes(&[], 0.95, Some(6.0));

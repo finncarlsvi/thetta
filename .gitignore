@@ -1,2 +1,6 @@
 /target
 /research/repos
+
+/web/node_modules
+/web/dist
+/.thetta-data

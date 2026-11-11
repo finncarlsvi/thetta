@@ -1,5 +1,5 @@
 use thetta_geometry::types::{
-    GcodeConfig, Point2D, Point3D, PocketConfig, PocketRegion, Polygon, Tool, Toolpath,
+    GcodeConfig, PocketConfig, PocketRegion, Point2D, Point3D, Polygon, Tool, Toolpath,
     ToolpathMove,
 };
 
@@ -263,22 +263,33 @@ mod tests {
 
     #[test]
     fn rectangular_pocket_produces_multiple_rings() {
-        let path = plan_pocket_toolpath(&rect_pocket(40.0, 20.0), &tool(), &PocketConfig::default(), &cfg());
+        let path = plan_pocket_toolpath(
+            &rect_pocket(40.0, 20.0),
+            &tool(),
+            &PocketConfig::default(),
+            &cfg(),
+        );
         let plunge_count = path
             .moves
             .iter()
             .filter(|m| matches!(m, ToolpathMove::Plunge { .. }))
             .count();
         assert!(plunge_count >= 2);
-        assert!(path
-            .moves
-            .iter()
-            .any(|m| matches!(m, ToolpathMove::HelicalRamp { .. })));
+        assert!(
+            path.moves
+                .iter()
+                .any(|m| matches!(m, ToolpathMove::HelicalRamp { .. }))
+        );
     }
 
     #[test]
     fn small_pocket_skipped() {
-        let path = plan_pocket_toolpath(&rect_pocket(4.0, 4.0), &tool(), &PocketConfig::default(), &cfg());
+        let path = plan_pocket_toolpath(
+            &rect_pocket(4.0, 4.0),
+            &tool(),
+            &PocketConfig::default(),
+            &cfg(),
+        );
         assert!(path.moves.is_empty());
     }
 
@@ -299,7 +310,12 @@ mod tests {
 
     #[test]
     fn linear_cuts_at_cut_depth() {
-        let path = plan_pocket_toolpath(&rect_pocket(40.0, 20.0), &tool(), &PocketConfig::default(), &cfg());
+        let path = plan_pocket_toolpath(
+            &rect_pocket(40.0, 20.0),
+            &tool(),
+            &PocketConfig::default(),
+            &cfg(),
+        );
         for mv in path.moves {
             if let ToolpathMove::LinearCut { to, .. } = mv {
                 assert!((to.z + cfg().cut_depth).abs() < 1e-9);

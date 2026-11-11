@@ -80,33 +80,55 @@ mod inner {
 
     /// Estimate sheet-metal thickness from a solid.
     ///
-    /// Strategy: find pairs of parallel planar faces and take the minimum
-    /// distance between them. Falls back to volume / max-face-area.
+    /// Strategy: find anti-parallel planar face pairs and pick the distance
+    /// from the *dominant* pair (largest shared face area). This avoids
+    /// incorrectly choosing narrow slot-wall gaps as thickness.
+    /// Falls back to volume / max-face-area.
     fn estimate_thickness(solid: &ffi::TopoDS_Shape) -> f64 {
         let faces = collect_planar_faces(solid);
 
-        // Try parallel-face-pair distance
-        let mut min_thickness = f64::MAX;
+        // Try anti-parallel planar face pair distance, preferring the pair
+        // with the largest minimum area (typically the broad top/bottom faces).
+        let mut best_thickness = None::<f64>;
+        let mut best_area_score = 0.0_f64;
         for i in 0..faces.len() {
             for j in (i + 1)..faces.len() {
-                let (n1, c1) = &faces[i];
-                let (n2, c2) = &faces[j];
-                // Check if normals are anti-parallel (dot ≈ -1)
+                let f1 = &faces[i];
+                let f2 = &faces[j];
+                let n1 = f1.normal;
+                let n2 = f2.normal;
+                let c1 = f1.center;
+                let c2 = f2.center;
+
+                // Accept both anti-parallel and parallel normals. OCC face
+                // orientation is not guaranteed to produce opposite normals
+                // for opposite faces, and requiring anti-parallel normals can
+                // force a bad fallback estimate.
                 let dot = n1.0 * n2.0 + n1.1 * n2.1 + n1.2 * n2.2;
-                if dot < -0.95 {
+                if dot.abs() > 0.95 {
                     let dx = c2.0 - c1.0;
                     let dy = c2.1 - c1.1;
                     let dz = c2.2 - c1.2;
                     let dist = (dx * n1.0 + dy * n1.1 + dz * n1.2).abs();
-                    if dist > 1e-6 && dist < min_thickness {
-                        min_thickness = dist;
+                    if dist <= 1e-6 {
+                        continue;
+                    }
+
+                    let area_score = f1.area.min(f2.area);
+                    let area_better = area_score > best_area_score * 1.001;
+                    let tie_break_distance = (area_score - best_area_score).abs() <= 1e-6
+                        && best_thickness.is_some_and(|best| dist < best);
+
+                    if area_better || tie_break_distance || best_thickness.is_none() {
+                        best_area_score = area_score;
+                        best_thickness = Some(dist);
                     }
                 }
             }
         }
 
-        if min_thickness < f64::MAX {
-            return min_thickness;
+        if let Some(thickness) = best_thickness {
+            return thickness;
         }
 
         // Fallback: volume / largest face area
@@ -122,8 +144,14 @@ mod inner {
         }
     }
 
-    /// Collect planar faces as (normal, center_point) tuples.
-    fn collect_planar_faces(solid: &ffi::TopoDS_Shape) -> Vec<((f64, f64, f64), (f64, f64, f64))> {
+    struct PlanarFaceInfo {
+        normal: (f64, f64, f64),
+        center: (f64, f64, f64),
+        area: f64,
+    }
+
+    /// Collect planar faces with normal, center point, and area.
+    fn collect_planar_faces(solid: &ffi::TopoDS_Shape) -> Vec<PlanarFaceInfo> {
         let mut result = Vec::new();
         let mut explorer = ffi::TopExp_Explorer_ctor(solid, ffi::TopAbs_ShapeEnum::TopAbs_FACE);
 
@@ -139,10 +167,15 @@ mod inner {
                 let mut point = ffi::new_point(0.0, 0.0, 0.0);
                 let mut normal = ffi::new_vec(0.0, 0.0, 0.0);
                 gprop_face.Normal(0.5, 0.5, point.pin_mut(), normal.pin_mut());
-                result.push((
-                    (normal.X(), normal.Y(), normal.Z()),
-                    (point.X(), point.Y(), point.Z()),
-                ));
+                let owned = ffi::ExplorerCurrentShape(&explorer);
+                let mut props = ffi::GProp_GProps_ctor();
+                ffi::BRepGProp_SurfaceProperties(&owned, props.pin_mut());
+                let area = props.Mass().abs();
+                result.push(PlanarFaceInfo {
+                    normal: (normal.X(), normal.Y(), normal.Z()),
+                    center: (point.X(), point.Y(), point.Z()),
+                    area,
+                });
             }
             explorer.pin_mut().Next();
         }
@@ -618,11 +651,7 @@ mod inner {
     }
 
     /// Rodrigues' rotation formula: rotate vector v around unit axis k by angle θ.
-    fn rodrigues_rotate(
-        v: (f64, f64, f64),
-        k: (f64, f64, f64),
-        theta: f64,
-    ) -> (f64, f64, f64) {
+    fn rodrigues_rotate(v: (f64, f64, f64), k: (f64, f64, f64), theta: f64) -> (f64, f64, f64) {
         let (sin_t, cos_t) = theta.sin_cos();
         let dot = v.0 * k.0 + v.1 * k.1 + v.2 * k.2;
         let cx = cross(k, v);
@@ -634,11 +663,7 @@ mod inner {
     }
 
     /// Create a box (sheet bed) as a 3D solid.
-    pub fn make_box(
-        width: f64,
-        height: f64,
-        depth: f64,
-    ) -> cxx::UniquePtr<ffi::TopoDS_Shape> {
+    pub fn make_box(width: f64, height: f64, depth: f64) -> cxx::UniquePtr<ffi::TopoDS_Shape> {
         let origin = ffi::new_point(0.0, 0.0, 0.0);
         let progress = ffi::Message_ProgressRange_ctor();
         let mut maker = ffi::BRepPrimAPI_MakeBox_ctor(&origin, width, height, depth);

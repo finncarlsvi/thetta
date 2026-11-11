@@ -1,0 +1,9 @@
+.git
+.claude
+target
+web/node_modules
+web/dist
+.thetta-data
+research
+research-cam
+sampleDOTs

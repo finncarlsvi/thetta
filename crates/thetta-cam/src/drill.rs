@@ -19,7 +19,7 @@ pub fn plan_drill_toolpath(
     let filtered: Vec<DrillHole> = holes
         .iter()
         .filter_map(|hole| {
-            if tool.diameter > hole.diameter {
+            if (tool.diameter - hole.diameter).abs() > 0.02 {
                 eprintln!(
                     "warning: skipping drill hole at ({:.3}, {:.3}) diameter {:.3} for tool {:.3}",
                     hole.center.x, hole.center.y, hole.diameter, tool.diameter
@@ -127,12 +127,15 @@ mod tests {
     fn single_hole_cycle_sequence() {
         let holes = vec![DrillHole {
             center: Point2D { x: 10.0, y: 20.0 },
-            diameter: 8.0,
+            diameter: 6.0,
         }];
         let path = plan_drill_toolpath(&holes, &tool(), &DrillConfig::default(), &cfg());
         assert_eq!(path.moves.len(), 5);
         assert!(matches!(path.moves[0], ToolpathMove::Rapid { .. }));
-        assert!(matches!(path.moves[1], ToolpathMove::DrillCycleStart { .. }));
+        assert!(matches!(
+            path.moves[1],
+            ToolpathMove::DrillCycleStart { .. }
+        ));
         assert!(matches!(path.moves[2], ToolpathMove::DrillHole { .. }));
         assert!(matches!(path.moves[3], ToolpathMove::DrillCycleEnd));
         assert!(matches!(path.moves[4], ToolpathMove::Retract { .. }));
@@ -143,15 +146,15 @@ mod tests {
         let holes = vec![
             DrillHole {
                 center: Point2D { x: 0.0, y: 0.0 },
-                diameter: 8.0,
+                diameter: 6.0,
             },
             DrillHole {
                 center: Point2D { x: 100.0, y: 0.0 },
-                diameter: 8.0,
+                diameter: 6.0,
             },
             DrillHole {
                 center: Point2D { x: 10.0, y: 0.0 },
-                diameter: 8.0,
+                diameter: 6.0,
             },
         ];
         let path = plan_drill_toolpath(&holes, &tool(), &DrillConfig::default(), &cfg());

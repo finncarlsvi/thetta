@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thetta_geometry::types::NestingResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,13 +53,14 @@ impl GLSOptimizer {
         &mut self,
         mut on_update: F,
         mut on_progress: P,
-        _stop_after: Duration,
+        stop_after: Duration,
         cancel: Option<&Arc<AtomicBool>>,
     ) -> NestingResult
     where
         F: FnMut(NestingResult),
         P: FnMut(usize, f64, f64, usize),
     {
+        let began = Instant::now();
         let sheet = self.engine.sheet_config().clone();
 
         // Only randomize pieces that LBF left with collisions or unplaced.
@@ -93,7 +94,7 @@ impl GLSOptimizer {
         let cancelled =
             |c: &Option<&Arc<AtomicBool>>| c.as_ref().is_some_and(|a| a.load(Ordering::Relaxed));
 
-        while !cancelled(&cancel) {
+        while !cancelled(&cancel) && began.elapsed() < stop_after {
             iteration += 1;
 
             let mut best_idx = None;
@@ -119,6 +120,9 @@ impl GLSOptimizer {
 
             let mut sampled = Vec::with_capacity(self.config.samples_per_move);
             for _ in 0..self.config.samples_per_move {
+                if cancelled(&cancel) || began.elapsed() >= stop_after {
+                    break;
+                }
                 let sample = uniform_sample(&mut self.rng, &sheet, self.engine.rotation_range(idx));
                 let score = self
                     .engine

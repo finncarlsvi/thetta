@@ -1,0 +1,30 @@
+services:
+  thetta:
+    build: .
+    image: thetta:latest
+    container_name: thetta
+    restart: unless-stopped
+    ports:
+      - "192.168.5.5:3007:3007"
+    environment:
+      THETTA_PUBLIC_URL: https://thetta.finn.xyz
+      THETTA_ALLOWED_EMAILS: finncarlsvi@gmail.com
+      THETTA_TOKEN_KEY_FILE: /run/secrets/token_key
+      ONSHAPE_CLIENT_ID_FILE: /run/secrets/onshape_client_id
+      ONSHAPE_CLIENT_SECRET_FILE: /run/secrets/onshape_client_secret
+    secrets:
+      - token_key
+      - onshape_client_id
+      - onshape_client_secret
+    volumes:
+      - thetta-data:/data
+    stop_grace_period: 15s
+volumes:
+  thetta-data:
+secrets:
+  token_key:
+    file: ${THETTA_SECRETS_DIR:-/home/finn/.config/thetta}/token_key
+  onshape_client_id:
+    file: ${THETTA_SECRETS_DIR:-/home/finn/.config/thetta}/onshape_client_id
+  onshape_client_secret:
+    file: ${THETTA_SECRETS_DIR:-/home/finn/.config/thetta}/onshape_client_secret

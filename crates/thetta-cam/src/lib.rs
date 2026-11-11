@@ -5,3 +5,5 @@ pub mod hole_classify;
 pub mod pocket;
 pub mod tool_db;
 pub mod toolpath;
+
+pub mod passes;

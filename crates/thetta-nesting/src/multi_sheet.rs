@@ -83,6 +83,10 @@ impl MultiSheetEngine {
             .collect()
     }
 
+    pub fn assignment_of(&self, piece_idx: usize) -> Option<usize> {
+        self.assignment.get(piece_idx).copied().flatten()
+    }
+
     pub fn place_on_sheet(
         &mut self,
         piece_idx: usize,

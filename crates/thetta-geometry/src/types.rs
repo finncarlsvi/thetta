@@ -212,6 +212,20 @@ pub struct Tool {
 }
 
 impl Tool {
+    /// Permit incomplete library definitions; zero denotes an unset value.
+    pub fn validate_definition(&self) -> Result<(), String> {
+        for (label, value) in [
+            ("diameter", self.diameter),
+            ("feed rate", self.feed_rate),
+            ("plunge rate", self.plunge_rate),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("T{}: {label} must be nonnegative", self.number));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.diameter <= 0.0 || !self.diameter.is_finite() {
             return Err(format!("T{}: diameter must be positive", self.number));
@@ -224,6 +238,9 @@ impl Tool {
         }
         if self.spindle_speed == 0 {
             return Err(format!("T{}: spindle speed must be positive", self.number));
+        }
+        if self.flute_count == 0 {
+            return Err(format!("T{}: flute count must be positive", self.number));
         }
         Ok(())
     }
@@ -244,12 +261,20 @@ impl ToolTable {
         self.tools.iter().map(|tool| tool.number).max().unwrap_or(0) + 1
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate_definitions(&self) -> Result<(), String> {
         let mut seen = HashSet::new();
         for tool in &self.tools {
             if !seen.insert(tool.number) {
                 return Err(format!("Duplicate tool number: T{}", tool.number));
             }
+            tool.validate_definition()?;
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.validate_definitions()?;
+        for tool in &self.tools {
             tool.validate()?;
         }
         Ok(())

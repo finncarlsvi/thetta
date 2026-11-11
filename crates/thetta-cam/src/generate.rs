@@ -21,6 +21,31 @@ pub struct SheetGcodeInput<'a> {
 }
 
 pub fn generate_sheet_gcode(input: &SheetGcodeInput<'_>) -> String {
+    generate_internal(input, None).expect("manual planner is infallible")
+}
+pub fn generate_sheet_gcode_planned(
+    input: &SheetGcodeInput<'_>,
+    profile_step: f64,
+    pocket_step: f64,
+    ramp_angle: f64,
+    compression: bool,
+    pocket_angle: f64,
+) -> Result<String, String> {
+    generate_internal(
+        input,
+        Some((
+            profile_step,
+            pocket_step,
+            ramp_angle,
+            compression,
+            pocket_angle,
+        )),
+    )
+}
+fn generate_internal(
+    input: &SheetGcodeInput<'_>,
+    passes: Option<(f64, f64, f64, bool, f64)>,
+) -> Result<String, String> {
     let mut profile_toolpaths = Vec::new();
     let mut drill_holes: Vec<DrillHole> = Vec::new();
     let mut pockets: Vec<PocketRegion> = Vec::new();
@@ -36,8 +61,11 @@ pub fn generate_sheet_gcode(input: &SheetGcodeInput<'_>) -> String {
             continue;
         };
 
-        let rotated =
-            polygon_ops::rotate(&piece.polygon, placement.rotation, Point2D { x: 0.0, y: 0.0 });
+        let rotated = polygon_ops::rotate(
+            &piece.polygon,
+            placement.rotation,
+            Point2D { x: 0.0, y: 0.0 },
+        );
         let placed = polygon_ops::translate(&rotated, placement.x, placement.y);
 
         let classified = crate::hole_classify::classify_holes(
@@ -66,13 +94,26 @@ pub fn generate_sheet_gcode(input: &SheetGcodeInput<'_>) -> String {
             .get(&(input.sheet_index, placement_idx))
             .unwrap_or(&empty_tabs);
 
-        let toolpath = crate::toolpath::plan_profile_toolpath(
-            &placed,
-            tabs,
-            input.profile_tool,
-            input.gcode_config,
-            input.profile_config,
-        );
+        let toolpath = if let Some((step, _, angle, compression, _)) = passes {
+            crate::passes::profile_entry(
+                &placed,
+                tabs,
+                input.profile_tool,
+                input.gcode_config,
+                input.profile_config,
+                step,
+                angle,
+                compression,
+            )?
+        } else {
+            crate::toolpath::plan_profile_toolpath(
+                &placed,
+                tabs,
+                input.profile_tool,
+                input.gcode_config,
+                input.profile_config,
+            )
+        };
         profile_toolpaths.push(toolpath);
     }
 
@@ -91,15 +132,28 @@ pub fn generate_sheet_gcode(input: &SheetGcodeInput<'_>) -> String {
     };
 
     let mut pocket_toolpaths = Vec::new();
-    if input.pocket_config.enabled && let Some(pocket_tool) = input.pocket_tool {
+    if input.pocket_config.enabled
+        && let Some(pocket_tool) = input.pocket_tool
+    {
         let ordered_pockets = nearest_neighbor_pockets(&pockets);
         for pocket in ordered_pockets {
-            let path = crate::pocket::plan_pocket_toolpath(
-                &pocket,
-                pocket_tool,
-                input.pocket_config,
-                input.gcode_config,
-            );
+            let path = if let Some((_, step, _, _, angle)) = passes {
+                crate::passes::pocket(
+                    &pocket,
+                    pocket_tool,
+                    input.gcode_config,
+                    input.pocket_config,
+                    step,
+                    angle,
+                )?
+            } else {
+                crate::pocket::plan_pocket_toolpath(
+                    &pocket,
+                    pocket_tool,
+                    input.pocket_config,
+                    input.gcode_config,
+                )
+            };
             if !path.moves.is_empty() {
                 pocket_toolpaths.push(path);
             }
@@ -107,7 +161,7 @@ pub fn generate_sheet_gcode(input: &SheetGcodeInput<'_>) -> String {
     }
 
     let drill_paths = drill_toolpath.into_iter().collect::<Vec<_>>();
-    crate::gcode::emit_multi_op_gcode(
+    Ok(crate::gcode::emit_multi_op_gcode(
         &drill_paths,
         &pocket_toolpaths,
         &profile_toolpaths,
@@ -116,7 +170,7 @@ pub fn generate_sheet_gcode(input: &SheetGcodeInput<'_>) -> String {
         input.profile_tool,
         input.gcode_config,
         input.sheet_index,
-    )
+    ))
 }
 
 pub fn generate_all_sheets(
@@ -274,7 +328,7 @@ mod tests {
             gcode_config: &gcfg(),
             profile_tool: &tool(3, 6.0),
             profile_config: &ProfileCutConfig::default(),
-            drill_tool: Some(&tool(1, 3.0)),
+            drill_tool: Some(&tool(1, 4.0)),
             drill_config: &DrillConfig {
                 tool_number: Some(1),
                 ..DrillConfig::default()
@@ -308,7 +362,7 @@ mod tests {
             gcode_config: &gcfg(),
             profile_tool: &tool(3, 6.0),
             profile_config: &ProfileCutConfig::default(),
-            drill_tool: Some(&tool(1, 3.0)),
+            drill_tool: Some(&tool(1, 4.0)),
             drill_config: &DrillConfig {
                 tool_number: Some(1),
                 ..DrillConfig::default()
@@ -320,7 +374,10 @@ mod tests {
             },
         };
         let g = generate_sheet_gcode(&input);
-        assert!(g.contains("X110.000 Y60.000"), "expected transformed drill center in output");
+        assert!(
+            g.contains("X110.000 Y60.000"),
+            "expected transformed drill center in output"
+        );
     }
 
     #[test]
@@ -359,7 +416,7 @@ mod tests {
             &tool(1, 6.0),
             &gcfg(),
             &ProfileCutConfig::default(),
-            Some(&tool(1, 3.0)),
+            Some(&tool(1, 4.0)),
             &DrillConfig {
                 tool_number: Some(1),
                 ..DrillConfig::default()

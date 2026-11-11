@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/thetta-app",
+    "crates/thetta-web",
     "crates/jagua-rs",
     "crates/thetta-nesting",
     "crates/thetta-step",

@@ -263,6 +263,42 @@ fn import_step_occt(
     })
 }
 
+pub fn extract_all_pieces(
+    model: &StepModel,
+) -> Result<(Vec<Piece>, Vec<StepPieceRef>), StepImportError> {
+    let mut pieces = Vec::new();
+    let mut refs = Vec::new();
+
+    for (solid_index, solid) in model.solids.iter().enumerate() {
+        if solid.profile.outer.len() < 3 {
+            continue;
+        }
+
+        let piece_id = PieceId(solid_index as u64);
+        pieces.push(Piece {
+            id: piece_id,
+            polygon: solid.profile.clone(),
+            source_file: model.source_path.clone(),
+            quantity: 1,
+        });
+        refs.push(StepPieceRef {
+            piece_id,
+            solid_key: solid.key,
+            source_path: model.source_path.clone(),
+            thickness_mm: solid.thickness_mm,
+        });
+    }
+
+    if pieces.is_empty() {
+        return Err(StepImportError::NoProfilesExtracted {
+            skipped: model.solids.len(),
+            reason: "all solids had invalid profiles".to_string(),
+        });
+    }
+
+    Ok((pieces, refs))
+}
+
 pub fn extract_pieces_for_thickness(
     model: &StepModel,
     selected_thickness_mm: f64,

@@ -90,7 +90,10 @@ pub fn project_tabs(tabs: &[Tab], offset_contour: &Polygon, tool_radius: f64) ->
     projected
 }
 
-pub fn select_entry_point(offset_contour: &Polygon, projected_tabs: &[ProjectedTab]) -> Option<EntryPoint> {
+pub fn select_entry_point(
+    offset_contour: &Polygon,
+    projected_tabs: &[ProjectedTab],
+) -> Option<EntryPoint> {
     let n = offset_contour.outer.len();
     if n < 2 {
         return None;
@@ -193,8 +196,10 @@ pub fn plan_profile_toolpath(
     }
 
     let entry_dist = edge_prefix_length(&offset.outer, entry.edge_index)
-        + polygon_ops::edge_length(offset.outer[entry.edge_index], offset.outer[(entry.edge_index + 1) % n])
-            * entry.t;
+        + polygon_ops::edge_length(
+            offset.outer[entry.edge_index],
+            offset.outer[(entry.edge_index + 1) % n],
+        ) * entry.t;
 
     let mut intervals = build_tab_intervals(&projected_tabs, &offset, entry_dist, perimeter);
     intervals.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -362,7 +367,11 @@ fn point_along_path(points: &[Point2D], segment_lengths: &[f64], distance: f64) 
     let mut remaining = distance.max(0.0);
     for (idx, seg_len) in segment_lengths.iter().enumerate() {
         if remaining <= *seg_len + EPS {
-            let t = if *seg_len <= EPS { 0.0 } else { remaining / *seg_len };
+            let t = if *seg_len <= EPS {
+                0.0
+            } else {
+                remaining / *seg_len
+            };
             return Point2D {
                 x: points[idx].x + (points[idx + 1].x - points[idx].x) * t,
                 y: points[idx].y + (points[idx + 1].y - points[idx].y) * t,
@@ -554,10 +563,7 @@ fn to_geo_polygon(poly: &Polygon) -> GeoPolygon<f64> {
         .holes
         .iter()
         .map(|ring| {
-            let mut points = ring
-                .iter()
-                .map(|p| (p.x, p.y))
-                .collect::<Vec<(f64, f64)>>();
+            let mut points = ring.iter().map(|p| (p.x, p.y)).collect::<Vec<(f64, f64)>>();
             if let Some(first) = points.first().copied()
                 && points.last().copied() != Some(first)
             {
@@ -571,10 +577,10 @@ fn to_geo_polygon(poly: &Polygon) -> GeoPolygon<f64> {
 }
 
 fn from_largest_multipolygon(multi: &MultiPolygon<f64>) -> Option<Polygon> {
-    let best = multi.0.iter().max_by(|a, b| {
-        area_abs(&a.exterior().0)
-            .total_cmp(&area_abs(&b.exterior().0))
-    })?;
+    let best = multi
+        .0
+        .iter()
+        .max_by(|a, b| area_abs(&a.exterior().0).total_cmp(&area_abs(&b.exterior().0)))?;
 
     let mut outer = best
         .exterior()
@@ -673,12 +679,19 @@ mod tests {
         );
 
         assert!(!path.moves.is_empty());
-        assert!(matches!(path.moves.first(), Some(ToolpathMove::Rapid { .. })));
-        assert!(matches!(path.moves.last(), Some(ToolpathMove::Retract { .. })));
-        assert!(path
-            .moves
-            .iter()
-            .any(|m| matches!(m, ToolpathMove::ArcCut { .. })));
+        assert!(matches!(
+            path.moves.first(),
+            Some(ToolpathMove::Rapid { .. })
+        ));
+        assert!(matches!(
+            path.moves.last(),
+            Some(ToolpathMove::Retract { .. })
+        ));
+        assert!(
+            path.moves
+                .iter()
+                .any(|m| matches!(m, ToolpathMove::ArcCut { .. }))
+        );
     }
 
     #[test]

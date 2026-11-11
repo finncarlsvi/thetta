@@ -17,17 +17,13 @@ struct ModalState {
     pos: Option<Point3D>,
 }
 
-pub fn emit_gcode(toolpaths: &[Toolpath], tool: &Tool, config: &GcodeConfig, sheet_index: usize) -> String {
-    emit_multi_op_gcode(
-        &[],
-        &[],
-        toolpaths,
-        None,
-        None,
-        tool,
-        config,
-        sheet_index,
-    )
+pub fn emit_gcode(
+    toolpaths: &[Toolpath],
+    tool: &Tool,
+    config: &GcodeConfig,
+    sheet_index: usize,
+) -> String {
+    emit_multi_op_gcode(&[], &[], toolpaths, None, None, tool, config, sheet_index)
 }
 
 pub fn emit_multi_op_gcode(
@@ -46,7 +42,11 @@ pub fn emit_multi_op_gcode(
     let _ = writeln!(out, "G21 (Metric)");
     let _ = writeln!(out, "G90 (Absolute positioning)");
     let _ = writeln!(out, "G17 (XY plane)");
-    let _ = writeln!(out, "{} (Work coordinate system)", ascii_sanitize(&config.coordinate_system));
+    let _ = writeln!(
+        out,
+        "{} (Work coordinate system)",
+        ascii_sanitize(&config.coordinate_system)
+    );
     let _ = writeln!(out, "G0 Z{} (Safe Z)", fmt3(config.safe_z));
 
     let mut modal = ModalState {
@@ -65,6 +65,7 @@ pub fn emit_multi_op_gcode(
     ];
 
     let mut last_tool_number: Option<u32> = None;
+    let mut last_rpm: Option<u32> = None;
     for (name, paths, tool_opt) in groups {
         if paths.is_empty() {
             continue;
@@ -85,10 +86,15 @@ pub fn emit_multi_op_gcode(
                 ascii_sanitize(&tool.name),
                 tool.diameter
             );
-            let _ = writeln!(out, "S{} M3 (Spindle on CW)", tool.spindle_speed);
+            let _ = writeln!(out, "G43 H{} (Machine tool length offset)", tool.number);
+            last_rpm = None;
             last_tool_number = Some(tool.number);
         }
 
+        if last_rpm != Some(tool.spindle_speed) {
+            let _ = writeln!(out, "S{} M3 (Spindle on CW)", tool.spindle_speed);
+            last_rpm = Some(tool.spindle_speed);
+        }
         let _ = writeln!(out);
         let _ = writeln!(out, "({name} Operations)");
         for (idx, path) in paths.iter().enumerate() {
@@ -528,5 +534,36 @@ mod tests {
             0,
         );
         assert_eq!(g.matches("M6").count(), 1);
+    }
+    #[test]
+    fn same_tool_different_operations_update_rpm() {
+        let mut a = tool();
+        let mut b = a.clone();
+        a.spindle_speed = 18000;
+        b.spindle_speed = 12000;
+        let path = Toolpath {
+            config: cfg(),
+            moves: vec![ToolpathMove::Rapid {
+                to: Point3D {
+                    x: 1.,
+                    y: 1.,
+                    z: 5.,
+                },
+            }],
+        };
+        let code = emit_multi_op_gcode(
+            &[],
+            std::slice::from_ref(&path),
+            std::slice::from_ref(&path),
+            None,
+            Some(&a),
+            &b,
+            &cfg(),
+            0,
+        );
+        assert_eq!(code.matches(" M6 ").count(), 1);
+        assert!(code.contains("G43 H3"));
+        assert!(code.contains("S18000 M3"));
+        assert!(code.contains("S12000 M3"));
     }
 }

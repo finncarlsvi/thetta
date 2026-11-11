@@ -59,7 +59,12 @@ pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
         let a = contour.outer[i];
         let b = contour.outer[(i + 1) % n];
         let length = edge_length(a, b);
-        let score = score_edge(vertex_scores[i], vertex_scores[(i + 1) % n], length, min_length);
+        let score = score_edge(
+            vertex_scores[i],
+            vertex_scores[(i + 1) % n],
+            length,
+            min_length,
+        );
         edge_starts.push(cumulative);
         edges.push(EdgeInfo {
             index: i,
@@ -95,12 +100,7 @@ pub fn generate_tabs(contour: &Polygon, config: &TabConfig) -> Vec<Tab> {
     }
 
     // Remove tabs that ended up too close after snapping
-    remove_spacing_conflicts(
-        &mut tabs,
-        &edges,
-        contour_perimeter,
-        2.0 * tab_width,
-    );
+    remove_spacing_conflicts(&mut tabs, &edges, contour_perimeter, 2.0 * tab_width);
 
     // Ensure minimum tab count by adding tabs on unused high-weight edges
     if tabs.len() < config.min_tabs {
@@ -175,10 +175,7 @@ fn snap_to_nearest_valid(
         let indices: Vec<usize> = if offset == 0 {
             vec![edge_idx]
         } else {
-            vec![
-                (edge_idx + offset) % n,
-                (edge_idx + n - offset) % n,
-            ]
+            vec![(edge_idx + offset) % n, (edge_idx + n - offset) % n]
         };
 
         for &ei in &indices {
@@ -239,8 +236,7 @@ fn find_edge_at_arc(arc: f64, edge_starts: &[f64], _contour_perimeter: f64) -> u
 }
 
 fn classify_vertex(prev: Point2D, curr: Point2D, next: Point2D) -> f64 {
-    let cross =
-        (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
+    let cross = (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
     if cross > COLLINEAR_THRESHOLD {
         1.0
     } else if cross < -COLLINEAR_THRESHOLD {
@@ -383,7 +379,7 @@ mod tests {
                     length: len,
                     score: 1.0,
                     weight: len,
-                        }
+                }
             })
             .collect::<Vec<_>>();
         let mut ordered = tabs
@@ -561,10 +557,17 @@ mod tests {
     #[test]
     fn test_world_space_transform_integration() {
         let base = test_shapes::rectangle(100.0, 40.0);
-        let rotated = crate::polygon_ops::rotate(&base, std::f64::consts::FRAC_PI_2, Point2D { x: 0.0, y: 0.0 });
+        let rotated = crate::polygon_ops::rotate(
+            &base,
+            std::f64::consts::FRAC_PI_2,
+            Point2D { x: 0.0, y: 0.0 },
+        );
         let placed = crate::polygon_ops::translate(&rotated, 250.0, 300.0);
         let tabs = generate_tabs(&placed, &default_cfg());
         assert!(!tabs.is_empty());
-        assert!(tabs.iter().all(|t| t.position.x > 200.0 && t.position.y > 250.0));
+        assert!(
+            tabs.iter()
+                .all(|t| t.position.x > 200.0 && t.position.y > 250.0)
+        );
     }
 }

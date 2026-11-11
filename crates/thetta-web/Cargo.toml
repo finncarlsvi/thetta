@@ -1,0 +1,30 @@
+[package]
+name = "thetta-web"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "compression-gzip"] }
+async-stream = "0.3"
+serde = { workspace = true }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+thetta-geometry = { path = "../thetta-geometry" }
+thetta-step = { path = "../thetta-step", features = ["occt"] }
+thetta-nesting = { path = "../thetta-nesting" }
+thetta-cam = { path = "../thetta-cam" }
+jagua-rs = { path = "../jagua-rs", features = ["spp"] }
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"

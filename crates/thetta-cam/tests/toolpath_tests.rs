@@ -1,9 +1,7 @@
 use thetta_cam::toolpath::{offset_contour, plan_profile_toolpath};
 use thetta_geometry::polygon_ops;
 use thetta_geometry::test_shapes;
-use thetta_geometry::types::{
-    GcodeConfig, Point2D, ProfileCutConfig, Tab, Tool, ToolpathMove,
-};
+use thetta_geometry::types::{GcodeConfig, Point2D, ProfileCutConfig, Tab, Tool, ToolpathMove};
 
 fn sample_tool() -> Tool {
     Tool {

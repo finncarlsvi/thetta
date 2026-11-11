@@ -4,6 +4,7 @@ pub mod conversion;
 pub mod engine;
 pub mod gls;
 pub mod hazard_counter;
+pub mod improve;
 pub mod lbf;
 pub mod multi_sheet;
 pub mod optimizer;

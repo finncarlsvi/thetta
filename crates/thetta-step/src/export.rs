@@ -125,7 +125,7 @@ fn export_sheet_json(
         solids,
         tabs: sheet_tabs,
     })
-        .map_err(|e| StepExportError::WriteError(e.to_string()))?;
+    .map_err(|e| StepExportError::WriteError(e.to_string()))?;
     std::fs::write(output_path, json).map_err(|e| StepExportError::WriteError(e.to_string()))?;
     Ok(())
 }

@@ -5,6 +5,7 @@ use crate::gls::{GLSOptimizer, OptimizerConfig};
 use crate::lbf::{LbfConfig, run_lbf, run_lbf_multisheet};
 use crate::multi_sheet::MultiSheetEngine;
 use jagua_rs::geometry::geo_enums::RotationRange;
+use std::cmp::Ordering as CmpOrdering;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -251,6 +252,19 @@ pub fn run_nesting_multisheet(
         let _ = tx.send(NestingUpdate::Improved(best_result.clone()));
     }
 
+    if !cancel.load(Ordering::Relaxed) {
+        consolidate_multisheet(
+            &mut ms_engine,
+            &pieces,
+            &sheet,
+            config.compression_step,
+            &resolved_orientations,
+            &tx,
+            &cancel,
+            &mut best_result,
+        );
+    }
+
     let _ = tx.send(NestingUpdate::Finished(best_result));
 }
 
@@ -294,4 +308,180 @@ fn write_back_subsheet(
             );
         }
     }
+}
+
+fn consolidate_multisheet(
+    ms_engine: &mut MultiSheetEngine,
+    pieces: &[Piece],
+    sheet: &SheetConfig,
+    compression_step: f64,
+    orientations: &[RotationRange],
+    tx: &mpsc::Sender<NestingUpdate>,
+    cancel: &Arc<AtomicBool>,
+    best_result: &mut NestingResult,
+) {
+    const MAX_PASSES: usize = 4;
+    const AREA_UTILIZATION_CUTOFF: f64 = 0.995;
+    let sheet_area_limit = sheet.width * sheet.height * AREA_UTILIZATION_CUTOFF;
+
+    for _ in 0..MAX_PASSES {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let mut moved_any = false;
+        let sheet_count = ms_engine.sheet_count();
+        if sheet_count <= 1 {
+            break;
+        }
+
+        for source_sheet in (1..sheet_count).rev() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let mut source_pieces = ms_engine.pieces_on_sheet(source_sheet);
+            if source_pieces.is_empty() {
+                continue;
+            }
+
+            let mut merged_entire_sheet = false;
+            for target_sheet in 0..source_sheet {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let mut combined_indices = ms_engine.pieces_on_sheet(target_sheet);
+                if combined_indices.is_empty() {
+                    continue;
+                }
+                combined_indices.extend(source_pieces.iter().copied());
+
+                if try_repack_into_sheet(
+                    ms_engine,
+                    pieces,
+                    sheet,
+                    compression_step,
+                    orientations,
+                    cancel,
+                    target_sheet,
+                    &combined_indices,
+                ) {
+                    merged_entire_sheet = true;
+                    moved_any = true;
+                    *best_result = ms_engine.current_result();
+                    let _ = tx.send(NestingUpdate::Improved(best_result.clone()));
+                    break;
+                }
+            }
+            if merged_entire_sheet {
+                continue;
+            }
+
+            // Small parts are easier to migrate into remaining gaps first.
+            source_pieces.sort_by(|a, b| {
+                ms_engine
+                    .piece_area(*a)
+                    .partial_cmp(&ms_engine.piece_area(*b))
+                    .unwrap_or(CmpOrdering::Equal)
+            });
+
+            for piece_idx in source_pieces {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                if ms_engine.assignment_of(piece_idx) != Some(source_sheet) {
+                    continue;
+                }
+
+                let piece_area = ms_engine.piece_area(piece_idx);
+
+                let mut moved_piece = false;
+                for target_sheet in 0..source_sheet {
+                    let mut target_piece_indices = ms_engine.pieces_on_sheet(target_sheet);
+                    let target_area = target_piece_indices
+                        .iter()
+                        .map(|idx| ms_engine.piece_area(*idx))
+                        .sum::<f64>();
+                    if target_area + piece_area > sheet_area_limit {
+                        continue;
+                    }
+
+                    target_piece_indices.push(piece_idx);
+                    if try_repack_into_sheet(
+                        ms_engine,
+                        pieces,
+                        sheet,
+                        compression_step,
+                        orientations,
+                        cancel,
+                        target_sheet,
+                        &target_piece_indices,
+                    ) {
+                        moved_piece = true;
+                        break;
+                    }
+                }
+
+                if !moved_piece {
+                    continue;
+                }
+                moved_any = true;
+                *best_result = ms_engine.current_result();
+                let _ = tx.send(NestingUpdate::Improved(best_result.clone()));
+
+                if ms_engine.pieces_on_sheet(source_sheet).is_empty() {
+                    break;
+                }
+            }
+        }
+
+        if !moved_any {
+            break;
+        }
+    }
+}
+
+fn try_repack_into_sheet(
+    ms_engine: &mut MultiSheetEngine,
+    pieces: &[Piece],
+    sheet: &SheetConfig,
+    compression_step: f64,
+    orientations: &[RotationRange],
+    cancel: &Arc<AtomicBool>,
+    target_sheet: usize,
+    piece_indices: &[usize],
+) -> bool {
+    let sub_pieces = piece_indices
+        .iter()
+        .map(|&idx| pieces[idx].clone())
+        .collect::<Vec<_>>();
+    let sub_orientations = piece_indices
+        .iter()
+        .map(|&idx| orientations[idx].clone())
+        .collect::<Vec<_>>();
+
+    let candidate = compress_strip(
+        &sub_pieces,
+        sheet.clone(),
+        compression_step,
+        Some(&sub_orientations),
+        Some(cancel),
+        Some(sheet.width),
+    );
+    let strip_fits = candidate
+        .sheets
+        .first()
+        .map_or(false, |s| s.strip_length <= sheet.width + 1.0);
+    if !candidate.unplaced.is_empty() || !strip_fits {
+        return false;
+    }
+
+    write_back_subsheet(
+        ms_engine,
+        target_sheet,
+        piece_indices,
+        &sub_pieces,
+        candidate.sheets.first(),
+    );
+    true
 }
